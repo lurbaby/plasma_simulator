@@ -8,6 +8,11 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['tok-sym-core'],
   },
+  // The hackathon API (datasets, test runs, live model) lives in the
+  // `fusionsim serve` process; the dev server forwards to it.
+  server: {
+    proxy: { '/api': 'http://127.0.0.1:9999' },
+  },
   build: {
     chunkSizeWarningLimit: 1500, // WASM bundle is large; suppress warning
   },

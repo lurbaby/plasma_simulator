@@ -8,3 +8,5 @@
 *.swp
 *.swo
 *~
+fusionsim-data/
+__pycache__/

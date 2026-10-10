@@ -169,6 +169,50 @@ impl SimHandle {
         self.sim.device.mass_number = mass;
     }
 
+    /// Override one actuator channel mid-pulse. Channels: "ip" (MA), "bt" (T),
+    /// "ne_target" (10²⁰ m⁻³), "p_nbi"/"p_ech"/"p_ich" (MW), "kappa", "delta",
+    /// "d2_puff"/"neon_puff" (10²⁰ particles/s). Takes effect on the next `step`.
+    #[wasm_bindgen]
+    pub fn set_override(&mut self, channel: &str, value: f64) -> Result<(), JsValue> {
+        self.sim.set_override(channel, value).map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// Return one channel to its programmed waveform.
+    #[wasm_bindgen]
+    pub fn clear_override(&mut self, channel: &str) -> Result<(), JsValue> {
+        self.sim.clear_override(channel).map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// Return every channel to its programmed waveform.
+    #[wasm_bindgen]
+    pub fn clear_overrides(&mut self) {
+        self.sim.overrides = Default::default();
+    }
+
+    /// Active overrides as JSON (`null` = following the program).
+    #[wasm_bindgen]
+    pub fn overrides_json(&self) -> String {
+        serde_json::to_string(&self.sim.overrides).unwrap_or_else(|_| "{}".into())
+    }
+
+    /// Replace the pulse program mid-pulse (physics state is kept).
+    #[wasm_bindgen]
+    pub fn set_program_json(&mut self, program_json: &str) -> Result<(), JsValue> {
+        self.sim.program = serde_json::from_str(program_json)
+            .map_err(|e| JsValue::from_str(&format!("Bad program JSON: {e}")))?;
+        Ok(())
+    }
+
+    /// Re-seed the disruption RNG (for reproducible runs). Small seeds are
+    /// scrambled first — xorshift's first draws from e.g. 1 are ≈ 0.
+    #[wasm_bindgen]
+    pub fn seed(&mut self, seed: u64) {
+        let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        self.sim.seed_disruption(z ^ (z >> 31));
+    }
+
     /// Get the device wall outline as JSON array of [r, z] points.
     #[wasm_bindgen]
     pub fn wall_outline_json(&self) -> String {

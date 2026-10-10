@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/tok-sym-core"]
+members = ["crates/tok-sym-core", "crates/fusion-cli"]
 resolver = "2"
 
 [profile.release]

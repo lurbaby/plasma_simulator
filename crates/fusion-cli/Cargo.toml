@@ -1,0 +1,16 @@
+[package]
+name = "fusion-cli"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Headless datasets, model test runs and the local API server for the fusion-sim hackathon tools"
+
+[[bin]]
+name = "fusionsim"
+path = "src/main.rs"
+
+[dependencies]
+tok-sym-core = { path = "../tok-sym-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tiny_http = "0.12"

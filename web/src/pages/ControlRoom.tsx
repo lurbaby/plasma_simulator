@@ -10,6 +10,9 @@ import PulsePlanner from '../components/PulsePlanner'
 import PortView from '../components/portview'
 import SettingsDropdown from '../components/SettingsDropdown'
 import TutorialOverlay from '../components/TutorialOverlay'
+import DatasetPanel from '../components/DatasetPanel'
+import TestRunPanel from '../components/TestRunPanel'
+import ControlPanel from '../components/ControlPanel'
 import { DIIID_LIMITER } from '../lib/diiid-geometry'
 import { JET_LIMITER } from '../lib/jet-geometry'
 import { ITER_LIMITER } from '../lib/iter-geometry'
@@ -53,6 +56,9 @@ export default function ControlRoom() {
   const [activeDevice, setActiveDevice] = useState(routeDeviceId ?? 'diiid')
   const [activePreset, setActivePreset] = useState<PresetId>(routePreset)
   const [showPlanner, setShowPlanner] = useState(false)
+  const [showDataset, setShowDataset] = useState(false)
+  const [showTestRun, setShowTestRun] = useState(false)
+  const [showControl, setShowControl] = useState(false)
   const [activeSpeed, setActiveSpeed] = useState(1.0)
 
   // Persistent Pulse Planner state — survives open/close of the drawer, and
@@ -316,6 +322,18 @@ export default function ControlRoom() {
               </span>
             )}
           </div>
+          <button onClick={() => setShowControl((v) => !v)} title="Керування розрядом: змінювати уставки під час розряду, прогноз і причини зриву"
+            className={`px-1.5 py-1 rounded text-xs border cursor-pointer ${showControl ? 'border-amber-500 text-amber-400' : 'border-gray-700 text-gray-300 hover:border-gray-500'}`}>
+            🎛<span className="hidden lg:inline"> Керування</span>
+          </button>
+          <button onClick={() => setShowDataset(true)} title="Зібрати датасет для навчання"
+            className="px-1.5 py-1 rounded text-xs border border-gray-700 text-gray-300 hover:border-gray-500 cursor-pointer">
+            ⛁<span className="hidden lg:inline"> Датасет</span>
+          </button>
+          <button onClick={() => setShowTestRun(true)} title="Залік моделі: спіймані зриви, хибні тривоги, причини"
+            className="px-1.5 py-1 rounded text-xs border border-gray-700 text-gray-300 hover:border-gray-500 cursor-pointer">
+            ⏱<span className="hidden lg:inline"> Залік</span>
+          </button>
           <SettingsDropdown onRestartTutorial={() => setTutorialActive(true)} />
         </div>
       </div>
@@ -399,6 +417,13 @@ export default function ControlRoom() {
           configOverride={configOverride}
           onConfigChange={setConfigOverride}
         />
+      )}
+
+      {showDataset && <DatasetPanel onClose={() => setShowDataset(false)} />}
+      {showTestRun && <TestRunPanel onClose={() => setShowTestRun(false)} />}
+      {showControl && (
+        <ControlPanel snapshot={state.snapshot} controls={controls} running={running}
+          onClose={() => setShowControl(false)} />
       )}
 
       {/* ─── Tutorial overlay ─── */}

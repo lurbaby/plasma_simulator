@@ -8,6 +8,14 @@ export class SimHandle {
     free(): void;
     [Symbol.dispose](): void;
     /**
+     * Return one channel to its programmed waveform.
+     */
+    clear_override(channel: string): void;
+    /**
+     * Return every channel to its programmed waveform.
+     */
+    clear_overrides(): void;
+    /**
      * Create from a device id + preset name ("hmode", "lmode", "density_limit").
      */
     static from_preset(device_id: string, preset: string): SimHandle;
@@ -21,14 +29,33 @@ export class SimHandle {
      */
     constructor(device_id: string, program_json: string);
     /**
+     * Active overrides as JSON (`null` = following the program).
+     */
+    overrides_json(): string;
+    /**
      * Reset the simulation to t = 0.
      */
     reset(): void;
+    /**
+     * Re-seed the disruption RNG (for reproducible runs). Small seeds are
+     * scrambled first — xorshift's first draws from e.g. 1 are ≈ 0.
+     */
+    seed(seed: bigint): void;
     /**
      * Override the device's fuel mass number (e.g. 2.0 for DD, 2.5 for DT).
      * Must be called before starting the simulation (before the first `step`).
      */
     set_mass_number(mass: number): void;
+    /**
+     * Override one actuator channel mid-pulse. Channels: "ip" (MA), "bt" (T),
+     * "ne_target" (10²⁰ m⁻³), "p_nbi"/"p_ech"/"p_ich" (MW), "kappa", "delta",
+     * "d2_puff"/"neon_puff" (10²⁰ particles/s). Takes effect on the next `step`.
+     */
+    set_override(channel: string, value: number): void;
+    /**
+     * Replace the pulse program mid-pulse (physics state is kept).
+     */
+    set_program_json(program_json: string): void;
     /**
      * Get the current status as a string.
      */
@@ -89,11 +116,17 @@ export interface InitOutput {
     readonly preset_density_limit_json: (a: number, b: number) => [number, number];
     readonly preset_hmode_json: (a: number, b: number) => [number, number];
     readonly preset_lmode_json: (a: number, b: number) => [number, number];
+    readonly simhandle_clear_override: (a: number, b: number, c: number) => [number, number];
+    readonly simhandle_clear_overrides: (a: number) => void;
     readonly simhandle_from_preset: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly simhandle_is_running: (a: number) => number;
     readonly simhandle_new: (a: number, b: number, c: number, d: number) => [number, number, number];
+    readonly simhandle_overrides_json: (a: number) => [number, number];
     readonly simhandle_reset: (a: number) => void;
+    readonly simhandle_seed: (a: number, b: bigint) => void;
     readonly simhandle_set_mass_number: (a: number, b: number) => void;
+    readonly simhandle_set_override: (a: number, b: number, c: number, d: number) => [number, number];
+    readonly simhandle_set_program_json: (a: number, b: number, c: number) => [number, number];
     readonly simhandle_status: (a: number) => [number, number];
     readonly simhandle_step: (a: number, b: number) => [number, number];
     readonly simhandle_time: (a: number) => number;

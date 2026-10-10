@@ -308,6 +308,16 @@ impl DisruptionModel {
         }
     }
 
+    /// Noise-free locked-mode amplitude of the current phase (0 before a trigger).
+    pub fn locked_mode_amplitude(&self) -> f64 {
+        match self.phase {
+            Some(DisruptionPhase::Precursor { amplitude, .. }) => amplitude,
+            Some(DisruptionPhase::ThermalQuench { .. }) => 5.0,
+            Some(DisruptionPhase::CurrentQuench { .. }) => 1.0,
+            _ => 0.0,
+        }
+    }
+
     /// Force an immediate disruption (e.g., due to wall contact).
     /// Uses a very short precursor since wall contact is sudden.
     pub fn force_disruption(&mut self) {

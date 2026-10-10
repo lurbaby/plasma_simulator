@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::contour::{self, Contour};
 use crate::devices::{Device, MagneticConfig};
+use crate::channels::{Channels, N_CHANNELS};
 use crate::diagnostics::{DiagnosticSignals, NoiseGen};
+use crate::disruption::DisruptionPhase;
 use crate::disruption::DisruptionModel;
 use crate::equilibrium::{CerfonEquilibrium, ShapeParams};
 use crate::profiles::Profiles;
@@ -351,6 +353,8 @@ pub struct SimulationSnapshot {
     pub prog_p_nbi: f64,
     pub prog_p_ech: f64,
     pub prog_p_ich: f64,
+    pub prog_kappa: f64,
+    pub prog_delta: f64,
 
     // Transport state
     pub ip: f64,
@@ -383,7 +387,25 @@ pub struct SimulationSnapshot {
 
     // Disruption
     pub disruption_risk: f64,
+    /// Individual risk factors (sigmoid outputs, 0-1) behind `disruption_risk`
+    pub risk_greenwald: f64,
+    pub risk_beta: f64,
+    pub risk_q95: f64,
+    pub risk_radiation: f64,
+    pub risk_locked_mode: f64,
     pub disrupted: bool,
+    /// Live actuator overrides active at this step
+    pub overrides: ProgramOverrides,
+    /// The hundred toksym-compatible measured channels (see `channels.rs`)
+    pub channels: Vec<f64>,
+    /// Disruption timeline: stochastic trigger, thermal quench (s)
+    pub t_trigger: Option<f64>,
+    pub t_tq: Option<f64>,
+    pub wall_contact: bool,
+    /// Disruption intensity λ at the trigger (1/s)
+    pub risk_at_trigger: f64,
+    /// Noise-free locked-mode amplitude (the saddle-coil channel)
+    pub locked_mode_amp: f64,
 
     // Profiles (51-point arrays, ρ = 0.00 to 1.00)
     pub te_profile: Vec<f64>,
@@ -451,12 +473,81 @@ fn sample_lcfs(r0: f64, a: f64, kappa: f64, delta: f64, z0: f64, n: usize) -> Ve
     points
 }
 
+/// Live actuator overrides applied on top of the pulse program.
+///
+/// Each `Some(v)` replaces the programmed waveform value for that channel
+/// from the moment it is set until it is cleared, so an external controller
+/// (e.g. a disruption predictor) can steer the plasma mid-pulse.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProgramOverrides {
+    pub ip: Option<f64>,
+    pub bt: Option<f64>,
+    pub ne_target: Option<f64>,
+    pub p_nbi: Option<f64>,
+    pub p_ech: Option<f64>,
+    pub p_ich: Option<f64>,
+    pub kappa: Option<f64>,
+    pub delta: Option<f64>,
+    pub d2_puff: Option<f64>,
+    pub neon_puff: Option<f64>,
+}
+
+impl ProgramOverrides {
+    /// Names accepted by [`ProgramOverrides::slot`].
+    pub const CHANNELS: [&'static str; 10] = [
+        "ip", "bt", "ne_target", "p_nbi", "p_ech", "p_ich",
+        "kappa", "delta", "d2_puff", "neon_puff",
+    ];
+
+    /// Mutable access to one override by channel name.
+    pub fn slot(&mut self, channel: &str) -> Option<&mut Option<f64>> {
+        Some(match channel {
+            "ip" => &mut self.ip,
+            "bt" => &mut self.bt,
+            "ne_target" => &mut self.ne_target,
+            "p_nbi" => &mut self.p_nbi,
+            "p_ech" => &mut self.p_ech,
+            "p_ich" => &mut self.p_ich,
+            "kappa" => &mut self.kappa,
+            "delta" => &mut self.delta,
+            "d2_puff" => &mut self.d2_puff,
+            "neon_puff" => &mut self.neon_puff,
+            _ => return None,
+        })
+    }
+
+    /// Replace programmed values with any active overrides.
+    pub fn apply(&self, prog: &mut ProgramValues) {
+        let pairs = [
+            (self.ip, &mut prog.ip),
+            (self.bt, &mut prog.bt),
+            (self.ne_target, &mut prog.ne_target),
+            (self.p_nbi, &mut prog.p_nbi),
+            (self.p_ech, &mut prog.p_ech),
+            (self.p_ich, &mut prog.p_ich),
+            (self.kappa, &mut prog.kappa),
+            (self.delta, &mut prog.delta),
+            (self.d2_puff, &mut prog.d2_puff),
+            (self.neon_puff, &mut prog.neon_puff),
+        ];
+        for (ov, slot) in pairs {
+            if let Some(v) = ov {
+                *slot = v;
+            }
+        }
+    }
+}
+
 /// The main simulation engine.
 pub struct Simulation {
     pub device: Device,
     pub program: PulseProgram,
     pub time: f64,
     pub status: SimulationStatus,
+    /// Live actuator overrides (see [`ProgramOverrides`]).
+    pub overrides: ProgramOverrides,
+    /// Build flux surfaces and separatrix in snapshots (off for headless runs)
+    pub compute_geometry: bool,
 
     // Physics models
     transport: TransportModel,
@@ -479,6 +570,14 @@ pub struct Simulation {
     // Smoothed l_i (resistive timescale ~ 200ms)
     smoothed_li: f64,
 
+    // Synthetic instruments and the disruption timeline
+    channels: Channels,
+    last_channels: [f64; N_CHANNELS],
+    pub t_trigger: Option<f64>,
+    pub t_tq: Option<f64>,
+    pub wall_contact: bool,
+    pub risk_at_trigger: f64,
+
     // Equilibrium grid resolution
     eq_nr: usize,
     eq_nz: usize,
@@ -496,6 +595,8 @@ impl Simulation {
             program,
             time: 0.0,
             status: SimulationStatus::Ready,
+            overrides: ProgramOverrides::default(),
+            compute_geometry: true,
             transport: TransportModel::default(),
             profiles,
             disruption: DisruptionModel::default(),
@@ -507,6 +608,12 @@ impl Simulation {
             smoothed_p_rad_frac: 0.0,
             peak_prog_ip: 0.0,
             smoothed_li: 1.2,
+            channels: Channels::new(),
+            last_channels: [0.0; N_CHANNELS],
+            t_trigger: None,
+            t_tq: None,
+            wall_contact: false,
+            risk_at_trigger: 0.0,
             eq_nr: 48,
             eq_nz: 72,
             n_flux_surfaces: 10,
@@ -531,6 +638,37 @@ impl Simulation {
         self.smoothed_f_greenwald = 0.0;
         self.smoothed_p_rad_frac = 0.0;
         self.peak_prog_ip = 0.0;
+        self.smoothed_li = 1.2;
+        self.channels = Channels::new();
+        self.last_channels = [0.0; N_CHANNELS];
+        self.t_trigger = None;
+        self.t_tq = None;
+        self.wall_contact = false;
+        self.risk_at_trigger = 0.0;
+        self.overrides = ProgramOverrides::default();
+    }
+
+    /// Programmed values at time `t` with live overrides applied.
+    pub fn effective_values(&self, t: f64) -> ProgramValues {
+        let mut prog = self.program.values_at(t);
+        self.overrides.apply(&mut prog);
+        prog
+    }
+
+    /// Override one actuator channel from now on (see [`ProgramOverrides::CHANNELS`]).
+    pub fn set_override(&mut self, channel: &str, value: f64) -> Result<(), String> {
+        let slot = self.overrides.slot(channel)
+            .ok_or_else(|| format!("Unknown channel: {channel}"))?;
+        *slot = Some(value);
+        Ok(())
+    }
+
+    /// Return a channel to its programmed waveform.
+    pub fn clear_override(&mut self, channel: &str) -> Result<(), String> {
+        let slot = self.overrides.slot(channel)
+            .ok_or_else(|| format!("Unknown channel: {channel}"))?;
+        *slot = None;
+        Ok(())
     }
 
     /// Start or resume the simulation.
@@ -558,8 +696,12 @@ impl Simulation {
             return self.snapshot();
         }
 
-        // Get programmed values
-        let prog = self.program.values_at(self.time);
+        // Get programmed values (with live controller overrides applied).
+        // `scheduled_ip` is the unmodified waveform: ramp-down detection uses
+        // it so that a controller lowering Ip does not switch off the
+        // stochastic disruption trigger.
+        let prog = self.effective_values(self.time);
+        let scheduled_ip = PulseProgram::interpolate(&self.program.ip, self.time);
 
         // ── Transport step ──
         self.transport
@@ -587,8 +729,8 @@ impl Simulation {
         self.smoothed_p_rad_frac += (p_rad_frac - self.smoothed_p_rad_frac) * alpha;
 
         // Track peak programmed Ip to detect the ramp-down phase.
-        if prog.ip > self.peak_prog_ip {
-            self.peak_prog_ip = prog.ip;
+        if scheduled_ip > self.peak_prog_ip {
+            self.peak_prog_ip = scheduled_ip;
         }
 
         // Scale threshold with ip_max — avoids spurious Greenwald violations
@@ -602,7 +744,7 @@ impl Simulation {
         // suppress the stochastic trigger once Ip has dropped below 90% of its
         // peak (i.e. the programmed ramp-down has begun).
         let in_rampdown = self.peak_prog_ip > 0.5
-            && prog.ip < 0.9 * self.peak_prog_ip;
+            && scheduled_ip < 0.9 * self.peak_prog_ip;
         if !self.disruption.disrupted && self.actual_ip > ip_threshold {
             self.disruption.update_risk(
                 self.smoothed_f_greenwald,
@@ -616,11 +758,14 @@ impl Simulation {
             // physics, not disruption precursors. Fade risk toward the baseline
             // floor as Ip drops.
             if in_rampdown {
-                let ramp_frac = (prog.ip / self.peak_prog_ip).clamp(0.0, 1.0);
+                let ramp_frac = (scheduled_ip / self.peak_prog_ip).clamp(0.0, 1.0);
                 self.disruption.risk *= ramp_frac;
                 self.disruption.risk = self.disruption.risk.max(0.005);
             } else {
-                self.disruption.check_trigger(dt);
+                if self.disruption.check_trigger(dt) {
+                    self.t_trigger = Some(self.time);
+                    self.risk_at_trigger = self.disruption.risk;
+                }
             }
         }
 
@@ -631,6 +776,11 @@ impl Simulation {
             self.transport.te0 *= disruption_effects.te_multiplier;
             self.transport.w_th *= disruption_effects.te_multiplier; // Energy drops with Te
 
+            if self.t_tq.is_none()
+                && matches!(self.disruption.phase, Some(DisruptionPhase::ThermalQuench { .. }))
+            {
+                self.t_tq = Some(self.time);
+            }
             if self.actual_ip < 0.01 {
                 self.status = SimulationStatus::Disrupted;
             }
@@ -773,18 +923,26 @@ impl Simulation {
                 }
                 // Check if this LCFS point is outside the wall
                 if !point_in_polygon(r, z, &self.device.wall_outline) {
+                    if !self.disruption.disrupted {
+                        self.t_trigger = Some(self.time);
+                        self.risk_at_trigger = self.disruption.risk;
+                        self.wall_contact = true;
+                    }
                     self.disruption.force_disruption();
                     break;
                 }
             }
         }
 
-        self.snapshot()
+        let mut snap = self.snapshot();
+        self.last_channels = self.channels.step(&snap, dt, self.device.a);
+        snap.channels = self.last_channels.to_vec();
+        snap
     }
 
     /// Generate a snapshot of the current state.
     fn snapshot(&self) -> SimulationSnapshot {
-        let prog = self.program.values_at(self.time);
+        let prog = self.effective_values(self.time);
 
         // Compute grid bounds using DEVICE dimensions (not the possibly-scaled shape
         // epsilon). This ensures the contour grid always extends to the full plasma
@@ -812,7 +970,7 @@ impl Simulation {
         }
 
         // Generate flux surfaces using device-level grid bounds
-        let mut flux_surfaces = if self.actual_ip > 0.1 {
+        let mut flux_surfaces = if self.compute_geometry && self.actual_ip > 0.1 {
             let grid = self.equilibrium.psi_norm_grid(
                 grid_r_min, grid_r_max, grid_z_min, grid_z_max,
                 self.eq_nr, self.eq_nz,
@@ -847,7 +1005,7 @@ impl Simulation {
         // Pass the device-level grid bounds so the extraction covers the full divertor
         // region even when the equilibrium ε is reduced (e.g. DN uses 0.88×ε).
         let sep_bounds = Some((grid_r_min, grid_r_max, grid_z_min, grid_z_max));
-        let mut separatrix = if self.actual_ip > 0.1 {
+        let mut separatrix = if self.compute_geometry && self.actual_ip > 0.1 {
             contour::extract_separatrix(&self.equilibrium, self.eq_nr, self.eq_nz, sep_bounds)
         } else {
             Contour {
@@ -934,6 +1092,8 @@ impl Simulation {
             prog_p_nbi: prog.p_nbi,
             prog_p_ech: prog.p_ech,
             prog_p_ich: prog.p_ich,
+            prog_kappa: prog.kappa,
+            prog_delta: prog.delta,
             ip: self.actual_ip,
             bt: prog.bt,
             te0: self.transport.te0,
@@ -964,6 +1124,18 @@ impl Simulation {
             te_profile: self.profiles.te_profile_array(),
             ne_profile: self.profiles.ne_profile_array(),
             disruption_risk: self.disruption.risk,
+            risk_greenwald: self.disruption.risk_greenwald,
+            risk_beta: self.disruption.risk_beta,
+            risk_q95: self.disruption.risk_q95,
+            risk_radiation: self.disruption.risk_radiation,
+            risk_locked_mode: self.disruption.risk_locked_mode,
+            overrides: self.overrides.clone(),
+            channels: self.last_channels.to_vec(),
+            t_trigger: self.t_trigger,
+            t_tq: self.t_tq,
+            wall_contact: self.wall_contact,
+            risk_at_trigger: self.risk_at_trigger,
+            locked_mode_amp: self.disruption.locked_mode_amplitude(),
             disrupted: self.disruption.disrupted,
             diagnostics,
             flux_surfaces,

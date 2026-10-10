@@ -290,18 +290,19 @@ pub fn jet() -> Device {
     Device {
         name: "JET".to_string(),
         id: "jet".to_string(),
-        r0: 2.85,
-        a: 0.80, // effective plasma minor radius — conservative for parametric equilibrium
+        // Geometry matches the hackathon's toksym build (ITPA HDB5 JET values)
+        r0: 2.89,
+        a: 0.95,
         bt_max: 3.45,
         ip_max: 4.8,
-        kappa: 1.95,
-        delta_upper: 0.20,
-        delta_lower: 0.20,
-        volume: 80.0,
-        surface_area: 120.0,
+        kappa: 1.70,
+        delta_upper: 0.25,
+        delta_lower: 0.25,
+        volume: 100.0,
+        surface_area: 150.0,
         mass_number: 2.0,
         z_eff: 1.6,
-        z0: 0.20, // slight upward shift to center plasma in vessel
+        z0: 0.10,
         wall_outline: jet_wall(),
         config: MagneticConfig::LowerSingleNull,
         impurity_elm: ImpurityElmParams {
@@ -313,11 +314,9 @@ pub fn jet() -> Device {
             delta_grassy_min: 0.35,
         },
         p_lh_factor: 0.9, // slight correction for JET ILW vs carbon wall
-        // JET DTE2 achieved better confinement than generic IPB98 at matched
-        // parameters, attributed to optimized NBI deposition, high shaping,
-        // and ILW wall conditioning. 1.25× brings P_fus into the 5-15 MW
-        // range consistent with DTE2/DTE3 results.
-        confinement_factor: 1.35,
+        // Plain IPB98 (factor 1.0), as in the hackathon's toksym build: its
+        // stored energy matches ours within ~3% only at this value.
+        confinement_factor: 1.0,
     }
 }
 

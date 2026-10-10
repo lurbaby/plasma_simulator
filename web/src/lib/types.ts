@@ -74,6 +74,19 @@ export interface Snapshot {
 
   // Disruption
   disruption_risk: number
+  risk_greenwald?: number
+  risk_beta?: number
+  risk_q95?: number
+  risk_radiation?: number
+  risk_locked_mode?: number
+  /** Live actuator overrides (null = following the program) */
+  overrides?: Partial<Record<string, number | null>>
+  /** The hundred toksym-compatible measured channels */
+  channels?: number[]
+  t_trigger?: number | null
+  t_tq?: number | null
+  prog_kappa?: number
+  prog_delta?: number
   disrupted: boolean
 
   // Diagnostics

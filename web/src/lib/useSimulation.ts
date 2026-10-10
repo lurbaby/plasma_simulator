@@ -38,7 +38,17 @@ export interface SimControls {
   setScrubTime: (time: number | null) => void
   setSpeed: (speed: number) => void
   setMassNumber: (mass: number | null) => void
+  /** Override an actuator mid-pulse (null returns it to the program). */
+  setOverride: (channel: OverrideChannel, value: number | null) => void
+  clearOverrides: () => void
+  /** Called with every physics step's snapshot, in order. Returns an unsubscribe. */
+  subscribeSteps: (cb: (snaps: Snapshot[]) => void) => () => void
 }
+
+export const OVERRIDE_CHANNELS = [
+  'ip', 'bt', 'ne_target', 'p_nbi', 'p_ech', 'p_ich', 'kappa', 'delta', 'd2_puff', 'neon_puff',
+] as const
+export type OverrideChannel = (typeof OVERRIDE_CHANNELS)[number]
 
 export function useSimulation(
   initialDeviceId: string,
@@ -60,6 +70,7 @@ export function useSimulation(
   const pFusSmoothedRef = useRef(0.0) // smoothed P_fus for ELM resilience
   const profileFramesRef = useRef<ProfileFrame[]>([])
   const lastProfileTimeRef = useRef<number>(-Infinity)
+  const stepListenersRef = useRef(new Set<(snaps: Snapshot[]) => void>())
 
   const [state, setState] = useState<SimState>({
     snapshot: null,
@@ -221,10 +232,12 @@ export function useSimulation(
     let elmType = 0
 
     const totalSteps = tickBatches * STEPS_PER_TICK
+    const stepSnaps: Snapshot[] = []
     for (let i = 0; i < totalSteps; i++) {
       const json = sim.step(DT)
       snap = JSON.parse(json)
       if (snap) {
+        stepSnaps.push(snap)
         if (snap.diagnostics.d_alpha > maxDAlpha) maxDAlpha = snap.diagnostics.d_alpha
         if (snap.elm_active) {
           anyElmActive = true
@@ -237,6 +250,8 @@ export function useSimulation(
         break
       }
     }
+
+    for (const cb of stepListenersRef.current) cb(stepSnaps)
 
     // Patch the final snapshot with latched ELM state from any sub-step
     if (snap && anyElmActive) {
@@ -451,10 +466,30 @@ export function useSimulation(
     })
   }, [])
 
+  const setOverride = useCallback((channel: OverrideChannel, value: number | null) => {
+    const sim = simRef.current
+    if (!sim) return
+    if (value === null || !Number.isFinite(value)) sim.clear_override(channel)
+    else sim.set_override(channel, value)
+  }, [])
+
+  const clearOverrides = useCallback(() => {
+    simRef.current?.clear_overrides()
+  }, [])
+
+  const subscribeSteps = useCallback((cb: (snaps: Snapshot[]) => void) => {
+    stepListenersRef.current.add(cb)
+    return () => { stepListenersRef.current.delete(cb) }
+  }, [])
+
   // Memoize controls to keep a stable reference
   const controls = useMemo<SimControls>(
-    () => ({ start, pause, reset, switchPreset, runProgram, setScrubTime, setSpeed, setMassNumber }),
-    [start, pause, reset, switchPreset, runProgram, setScrubTime, setSpeed, setMassNumber],
+    () => ({
+      start, pause, reset, switchPreset, runProgram, setScrubTime, setSpeed, setMassNumber,
+      setOverride, clearOverrides, subscribeSteps,
+    }),
+    [start, pause, reset, switchPreset, runProgram, setScrubTime, setSpeed, setMassNumber,
+      setOverride, clearOverrides, subscribeSteps],
   )
 
   return [state, controls]

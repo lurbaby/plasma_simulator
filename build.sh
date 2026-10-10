@@ -15,9 +15,14 @@ wasm-pack build "$REPO_ROOT/crates/tok-sym-core" \
   --features wasm
 
 echo ""
+echo "=== Building fusionsim (datasets, test runs, API server) ==="
+cargo build --release -p fusion-cli --manifest-path "$REPO_ROOT/Cargo.toml"
+
+echo ""
 echo "=== Building frontend ==="
 cd "$REPO_ROOT/web"
 npm run build
 
 echo ""
 echo "=== Done! Output in web/dist/ ==="
+echo "Run:  ./target/release/fusionsim serve --models-dir ../models   →  http://127.0.0.1:9999/"

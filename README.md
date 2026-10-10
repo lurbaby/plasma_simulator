@@ -5,6 +5,17 @@ fusionsimulator.io combines a Rust physics engine (compiled to WebAssembly) with
 React/TypeScript frontend to provide an interactive control room experience
 for exploring tokamak plasma behavior.
 
+## Hackathon tools
+
+This fork adds the organisers' toksym workflow (Dataset, Test run with model
+selection, CAUGHT / FALSE ALARMS / THRESHOLD / MEDIAN WARNING report, CSV
+downloads) on a noise-free engine, plus live actuator control from a model.
+See [HACKATHON.md](HACKATHON.md) (changelog, comparison with toksym),
+[docs/USER_GUIDE.md](docs/USER_GUIDE.md) (how to use, Ukrainian) and
+[docs/PHYSICS_CONTROLS.md](docs/PHYSICS_CONTROLS.md) (controllable parameters for physicists).
+
+Quick start: `./build.sh && ./target/release/fusionsim serve --models-dir ../models --python ../participant/venv/bin/python` → http://127.0.0.1:9999/
+
 ## Features
 
 - **Four tokamak devices:** DIII-D, JET, ITER, and CENTAUR (conceptual

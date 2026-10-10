@@ -22,6 +22,24 @@ export class SimHandle {
         wasm.__wbg_simhandle_free(ptr, 0);
     }
     /**
+     * Return one channel to its programmed waveform.
+     * @param {string} channel
+     */
+    clear_override(channel) {
+        const ptr0 = passStringToWasm0(channel, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.simhandle_clear_override(this.__wbg_ptr, ptr0, len0);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+     * Return every channel to its programmed waveform.
+     */
+    clear_overrides() {
+        wasm.simhandle_clear_overrides(this.__wbg_ptr);
+    }
+    /**
      * Create from a device id + preset name ("hmode", "lmode", "density_limit").
      * @param {string} device_id
      * @param {string} preset
@@ -66,10 +84,34 @@ export class SimHandle {
         return this;
     }
     /**
+     * Active overrides as JSON (`null` = following the program).
+     * @returns {string}
+     */
+    overrides_json() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.simhandle_overrides_json(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * Reset the simulation to t = 0.
      */
     reset() {
         wasm.simhandle_reset(this.__wbg_ptr);
+    }
+    /**
+     * Re-seed the disruption RNG (for reproducible runs). Small seeds are
+     * scrambled first — xorshift's first draws from e.g. 1 are ≈ 0.
+     * @param {bigint} seed
+     */
+    seed(seed) {
+        wasm.simhandle_seed(this.__wbg_ptr, seed);
     }
     /**
      * Override the device's fuel mass number (e.g. 2.0 for DD, 2.5 for DT).
@@ -78,6 +120,33 @@ export class SimHandle {
      */
     set_mass_number(mass) {
         wasm.simhandle_set_mass_number(this.__wbg_ptr, mass);
+    }
+    /**
+     * Override one actuator channel mid-pulse. Channels: "ip" (MA), "bt" (T),
+     * "ne_target" (10²⁰ m⁻³), "p_nbi"/"p_ech"/"p_ich" (MW), "kappa", "delta",
+     * "d2_puff"/"neon_puff" (10²⁰ particles/s). Takes effect on the next `step`.
+     * @param {string} channel
+     * @param {number} value
+     */
+    set_override(channel, value) {
+        const ptr0 = passStringToWasm0(channel, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.simhandle_set_override(this.__wbg_ptr, ptr0, len0, value);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+     * Replace the pulse program mid-pulse (physics state is kept).
+     * @param {string} program_json
+     */
+    set_program_json(program_json) {
+        const ptr0 = passStringToWasm0(program_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.simhandle_set_program_json(this.__wbg_ptr, ptr0, len0);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
     }
     /**
      * Get the current status as a string.

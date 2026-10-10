@@ -76,6 +76,10 @@ pub mod simulation;
 /// Synthetic diagnostic signal generation.
 pub mod diagnostics;
 
+pub mod channels;
+
+pub mod generator;
+
 /// WASM-bindgen API surface (JSON-based, feature-gated).
 #[cfg(feature = "wasm")]
 mod wasm_api;
