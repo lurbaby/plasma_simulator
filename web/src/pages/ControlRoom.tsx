@@ -68,7 +68,8 @@ export default function ControlRoom() {
   const [plannerPreset, setPlannerPreset] = useState<PresetId>(handoff?.presetId ?? routePreset)
   const [hasCustomProgram, setHasCustomProgram] = useState(!!handoff)
   const [configOverride, setConfigOverride] = useState<MagneticConfig | null>(handoff?.configOverride ?? null)
-  const defaultFuel = (id: string): 'DD' | 'DT' => (id === 'iter' || id === 'jet') ? 'DT' : 'DD'
+  // JET runs DD by default, as in the hackathon's toksym (all models are trained on DD).
+  const defaultFuel = (id: string): 'DD' | 'DT' => (id === 'iter') ? 'DT' : 'DD'
   const [fuelType, setFuelType] = useState<'DD' | 'DT'>(defaultFuel(activeDevice))
 
   const devices = useMemo(() => getDevices(), [])
@@ -322,7 +323,7 @@ export default function ControlRoom() {
               </span>
             )}
           </div>
-          <button onClick={() => setShowControl((v) => !v)} title="Керування розрядом: змінювати уставки під час розряду, прогноз і причини зриву"
+          <button onClick={() => setShowControl((v) => !v)} title="Керування розрядом: модель, fixer, уставки"
             className={`px-1.5 py-1 rounded text-xs border cursor-pointer ${showControl ? 'border-amber-500 text-amber-400' : 'border-gray-700 text-gray-300 hover:border-gray-500'}`}>
             🎛<span className="hidden lg:inline"> Керування</span>
           </button>
@@ -421,10 +422,9 @@ export default function ControlRoom() {
 
       {showDataset && <DatasetPanel onClose={() => setShowDataset(false)} />}
       {showTestRun && <TestRunPanel onClose={() => setShowTestRun(false)} />}
-      {showControl && (
-        <ControlPanel snapshot={state.snapshot} controls={controls} running={running}
-          onClose={() => setShowControl(false)} />
-      )}
+      {/* Always mounted: the predictor, fixer, status banner and pop-ups run even when the panel is hidden. */}
+      <ControlPanel snapshot={state.snapshot} controls={controls} running={running}
+        open={showControl} onClose={() => setShowControl(false)} />
 
       {/* ─── Tutorial overlay ─── */}
       {tutorialActive && (

@@ -16,6 +16,29 @@ export class SimHandle {
      */
     clear_overrides(): void;
     /**
+     * Apply a fixer action by name (e.g. "ne_-10", "relax") to the current
+     * multipliers — how a student model's decision reaches the plasma.
+     * Returns false for an unknown name.
+     */
+    fixer_apply_action(name: string): boolean;
+    /**
+     * Start a fixer decision: copy the current state; candidates are then
+     * evaluated one per `fixer_step()` call, so the work spreads over frames.
+     */
+    fixer_begin(horizon: number, dt: number, alpha: number): void;
+    /**
+     * Progress of the current decision: [done, total].
+     */
+    fixer_progress(): Uint32Array;
+    /**
+     * The finished decision as JSON (and forget the planner), or "" if none.
+     */
+    fixer_result(): string;
+    /**
+     * Evaluate the next candidate; returns true when the decision is ready.
+     */
+    fixer_step(): boolean;
+    /**
      * Create from a device id + preset name ("hmode", "lmode", "density_limit").
      */
     static from_preset(device_id: string, preset: string): SimHandle;
@@ -37,6 +60,10 @@ export class SimHandle {
      */
     reset(): void;
     /**
+     * Return every multiplier to 1 (the programme as written).
+     */
+    reset_scales(): void;
+    /**
      * Re-seed the disruption RNG (for reproducible runs). Small seeds are
      * scrambled first — xorshift's first draws from e.g. 1 are ≈ 0.
      */
@@ -56,6 +83,19 @@ export class SimHandle {
      * Replace the pulse program mid-pulse (physics state is kept).
      */
     set_program_json(program_json: string): void;
+    /**
+     * Set the controller multipliers on the programme (JSON ProgramScales).
+     */
+    set_scales_json(json: string): void;
+    /**
+     * Split off the shadow plasma (a copy without interventions, same random
+     * draws) — call right *before* the first intervention. No-op if one exists.
+     */
+    shadow_start(): void;
+    /**
+     * The shadow's story as JSON (see `ShadowStatus`), or "" if none.
+     */
+    shadow_status_json(): string;
     /**
      * Get the current status as a string.
      */
@@ -118,15 +158,24 @@ export interface InitOutput {
     readonly preset_lmode_json: (a: number, b: number) => [number, number];
     readonly simhandle_clear_override: (a: number, b: number, c: number) => [number, number];
     readonly simhandle_clear_overrides: (a: number) => void;
+    readonly simhandle_fixer_apply_action: (a: number, b: number, c: number) => number;
+    readonly simhandle_fixer_begin: (a: number, b: number, c: number, d: number) => void;
+    readonly simhandle_fixer_progress: (a: number) => [number, number];
+    readonly simhandle_fixer_result: (a: number) => [number, number];
+    readonly simhandle_fixer_step: (a: number) => number;
     readonly simhandle_from_preset: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly simhandle_is_running: (a: number) => number;
     readonly simhandle_new: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly simhandle_overrides_json: (a: number) => [number, number];
     readonly simhandle_reset: (a: number) => void;
+    readonly simhandle_reset_scales: (a: number) => void;
     readonly simhandle_seed: (a: number, b: bigint) => void;
     readonly simhandle_set_mass_number: (a: number, b: number) => void;
     readonly simhandle_set_override: (a: number, b: number, c: number, d: number) => [number, number];
     readonly simhandle_set_program_json: (a: number, b: number, c: number) => [number, number];
+    readonly simhandle_set_scales_json: (a: number, b: number, c: number) => [number, number];
+    readonly simhandle_shadow_start: (a: number) => void;
+    readonly simhandle_shadow_status_json: (a: number) => [number, number];
     readonly simhandle_status: (a: number) => [number, number];
     readonly simhandle_step: (a: number, b: number) => [number, number];
     readonly simhandle_time: (a: number) => number;

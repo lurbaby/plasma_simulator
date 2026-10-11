@@ -9,6 +9,7 @@ mod model;
 mod run;
 mod scoring;
 mod server;
+mod teach;
 mod testrun;
 
 use std::path::PathBuf;
@@ -29,6 +30,14 @@ const HELP: &str = "fusionsim — симулятор токамака fusion-sim
   fusionsim score --submission DIR [--shots 200] [--seed 1] [--lead 0.1] [--budget 0.05]
                   [--threshold X] [--report run.json] [--save-data DIR] [--python PY]
         Прогнати модель і видати звіт.
+
+  fusionsim teach --shots N --seed S --out DIR [--mode teacher|label|student|none] [--student ТЕКА] [--alpha 0.5] [--horizon 1.0]
+                  [--period 0.25] [--rollout-dt 0.02] [--stride N] [--extras risk,physics] [--jobs 8]
+        Розряди під керуванням fixer (вчитель): measured.csv (+множники уставок, λ),
+        decisions.csv (ризик і втрата кожної дії на кожному рішенні), shots.csv.
+        --mode none — ті самі розряди без керування (точка відліку);
+        --mode label — вчитель розмічає, але не діє (мітки для небезпечних станів);
+        --mode student --student ТЕКА — керує модель-учень (+ аудит вчителем, --no-audit вимикає).
 
   fusionsim rescore <run.json> [--lead СЕК] [--budget ЧАСТКА] [--threshold X] [--out файл]
         Перерахувати звіт під інше правило.
@@ -163,6 +172,42 @@ fn main() {
                 eprintln!("Звіт: {f}\n");
             }
             testrun::print_summary(&rep);
+            Ok(())
+        })(),
+        "teach" => (|| {
+            let out = PathBuf::from(a.get("--out").unwrap_or_else(|| "teach".into()));
+            let shots: usize = a.num("--shots", 20);
+            let mode = teach::Mode::parse(&a.get("--mode").unwrap_or_else(|| "teacher".into()))?;
+            let student = match a.get("--student") {
+                Some(d) => {
+                    let dir = PathBuf::from(absolute(d));
+                    let ins = model::inspect(&dir, &python);
+                    if !ins.problems.is_empty() {
+                        return Err(ins.problems.join("; "));
+                    }
+                    Some(teach::StudentSpec { dir, entry: ins.entry.unwrap(), python: python.clone() })
+                }
+                None if mode == teach::Mode::Student => return Err("--mode student потребує --student ТЕКА".into()),
+                None => None,
+            };
+            let cfg = teach::TeachConfig {
+                shots,
+                seed: a.num("--seed", 1),
+                mode,
+                fixer: tok_sym_core::fixer::FixerConfig {
+                    horizon: a.num("--horizon", 1.0),
+                    dt: a.num("--rollout-dt", 0.02),
+                    alpha: a.num("--alpha", 0.5),
+                },
+                period: a.num("--period", 0.25),
+                stride: a.num("--stride", 1),
+                extras: a.get("--extras").map(|s| s.split(',').map(String::from).collect()).unwrap_or_default(),
+                jobs: a.num("--jobs", std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)),
+                student,
+                audit: !a.has("--no-audit"),
+            };
+            let msg = teach::teach(&out, &cfg, |d| eprintln!("  {d}/{shots} розрядів"))?;
+            eprintln!("{msg}\nФайли: {}/measured.csv, decisions.csv, shots.csv", out.display());
             Ok(())
         })(),
         "rescore" => (|| {

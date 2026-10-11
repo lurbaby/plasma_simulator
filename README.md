@@ -12,7 +12,9 @@ selection, CAUGHT / FALSE ALARMS / THRESHOLD / MEDIAN WARNING report, CSV
 downloads) on a noise-free engine, plus live actuator control from a model.
 See [HACKATHON.md](HACKATHON.md) (changelog, comparison with toksym),
 [docs/USER_GUIDE.md](docs/USER_GUIDE.md) (how to use, Ukrainian) and
-[docs/PHYSICS_CONTROLS.md](docs/PHYSICS_CONTROLS.md) (controllable parameters for physicists).
+[docs/PHYSICS_CONTROLS.md](docs/PHYSICS_CONTROLS.md) (controllable parameters for physicists),
+[docs/FIXER.md](docs/FIXER.md) (real-time disruption avoidance, teacher dataset),
+[docs/MODELS.md](docs/MODELS.md) (what each neural network does).
 
 Quick start: `./build.sh && ./target/release/fusionsim serve --models-dir ../models --python ../participant/venv/bin/python` → http://127.0.0.1:9999/
 

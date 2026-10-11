@@ -43,6 +43,8 @@ export interface SimControls {
   clearOverrides: () => void
   /** Called with every physics step's snapshot, in order. Returns an unsubscribe. */
   subscribeSteps: (cb: (snaps: Snapshot[]) => void) => () => void
+  /** The live engine handle (fixer look-ahead, programme multipliers). */
+  getSim: () => SimHandle | null
 }
 
 export const OVERRIDE_CHANNELS = [
@@ -477,6 +479,8 @@ export function useSimulation(
     simRef.current?.clear_overrides()
   }, [])
 
+  const getSim = useCallback(() => simRef.current, [])
+
   const subscribeSteps = useCallback((cb: (snaps: Snapshot[]) => void) => {
     stepListenersRef.current.add(cb)
     return () => { stepListenersRef.current.delete(cb) }
@@ -486,10 +490,10 @@ export function useSimulation(
   const controls = useMemo<SimControls>(
     () => ({
       start, pause, reset, switchPreset, runProgram, setScrubTime, setSpeed, setMassNumber,
-      setOverride, clearOverrides, subscribeSteps,
+      setOverride, clearOverrides, subscribeSteps, getSim,
     }),
     [start, pause, reset, switchPreset, runProgram, setScrubTime, setSpeed, setMassNumber,
-      setOverride, clearOverrides, subscribeSteps],
+      setOverride, clearOverrides, subscribeSteps, getSim],
   )
 
   return [state, controls]

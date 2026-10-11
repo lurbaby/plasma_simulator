@@ -38,6 +38,9 @@ pub struct ShotSpec {
     pub scenario: String,
     pub duration: f64,
     pub program: PulseProgram,
+    /// The same programme without the unplanned disturbances: what the
+    /// control system knows in advance.
+    pub plan: PulseProgram,
 }
 
 /// splitmix64 — small, seedable, good enough for scenario draws.
@@ -155,6 +158,8 @@ pub fn generate_shot(device: &Device, master_seed: u64, shot_id: u64) -> ShotSpe
         config_override: None,
     };
 
+    let plan = prog.clone();
+
     // How many disturbances: 1/5 none, 1/6 two, the rest one.
     let u = r.f();
     let n_dist = if u < 0.2 { 0 } else if u < 0.2 + 1.0 / 6.0 { 2 } else { 1 };
@@ -198,7 +203,7 @@ pub fn generate_shot(device: &Device, master_seed: u64, shot_id: u64) -> ShotSpe
     }
 
     let scenario = if kinds.is_empty() { "none".to_string() } else { kinds.join("+") };
-    ShotSpec { shot_id, seed, scenario, duration, program: prog }
+    ShotSpec { shot_id, seed, scenario, duration, program: prog, plan }
 }
 
 #[cfg(test)]

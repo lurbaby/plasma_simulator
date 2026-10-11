@@ -40,6 +40,63 @@ export class SimHandle {
         wasm.simhandle_clear_overrides(this.__wbg_ptr);
     }
     /**
+     * Apply a fixer action by name (e.g. "ne_-10", "relax") to the current
+     * multipliers — how a student model's decision reaches the plasma.
+     * Returns false for an unknown name.
+     * @param {string} name
+     * @returns {boolean}
+     */
+    fixer_apply_action(name) {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.simhandle_fixer_apply_action(this.__wbg_ptr, ptr0, len0);
+        return ret !== 0;
+    }
+    /**
+     * Start a fixer decision: copy the current state; candidates are then
+     * evaluated one per `fixer_step()` call, so the work spreads over frames.
+     * @param {number} horizon
+     * @param {number} dt
+     * @param {number} alpha
+     */
+    fixer_begin(horizon, dt, alpha) {
+        wasm.simhandle_fixer_begin(this.__wbg_ptr, horizon, dt, alpha);
+    }
+    /**
+     * Progress of the current decision: [done, total].
+     * @returns {Uint32Array}
+     */
+    fixer_progress() {
+        const ret = wasm.simhandle_fixer_progress(this.__wbg_ptr);
+        var v1 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * The finished decision as JSON (and forget the planner), or "" if none.
+     * @returns {string}
+     */
+    fixer_result() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.simhandle_fixer_result(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * Evaluate the next candidate; returns true when the decision is ready.
+     * @returns {boolean}
+     */
+    fixer_step() {
+        const ret = wasm.simhandle_fixer_step(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
      * Create from a device id + preset name ("hmode", "lmode", "density_limit").
      * @param {string} device_id
      * @param {string} preset
@@ -106,6 +163,12 @@ export class SimHandle {
         wasm.simhandle_reset(this.__wbg_ptr);
     }
     /**
+     * Return every multiplier to 1 (the programme as written).
+     */
+    reset_scales() {
+        wasm.simhandle_reset_scales(this.__wbg_ptr);
+    }
+    /**
      * Re-seed the disruption RNG (for reproducible runs). Small seeds are
      * scrambled first — xorshift's first draws from e.g. 1 are ≈ 0.
      * @param {bigint} seed
@@ -146,6 +209,41 @@ export class SimHandle {
         const ret = wasm.simhandle_set_program_json(this.__wbg_ptr, ptr0, len0);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+     * Set the controller multipliers on the programme (JSON ProgramScales).
+     * @param {string} json
+     */
+    set_scales_json(json) {
+        const ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.simhandle_set_scales_json(this.__wbg_ptr, ptr0, len0);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+     * Split off the shadow plasma (a copy without interventions, same random
+     * draws) — call right *before* the first intervention. No-op if one exists.
+     */
+    shadow_start() {
+        wasm.simhandle_shadow_start(this.__wbg_ptr);
+    }
+    /**
+     * The shadow's story as JSON (see `ShadowStatus`), or "" if none.
+     * @returns {string}
+     */
+    shadow_status_json() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.simhandle_shadow_status_json(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
         }
     }
     /**
@@ -354,9 +452,22 @@ const SimHandleFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_simhandle_free(ptr >>> 0, 1));
 
+function getArrayU32FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getUint32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
+}
+
 function getStringFromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return decodeText(ptr, len);
+}
+
+let cachedUint32ArrayMemory0 = null;
+function getUint32ArrayMemory0() {
+    if (cachedUint32ArrayMemory0 === null || cachedUint32ArrayMemory0.byteLength === 0) {
+        cachedUint32ArrayMemory0 = new Uint32Array(wasm.memory.buffer);
+    }
+    return cachedUint32ArrayMemory0;
 }
 
 let cachedUint8ArrayMemory0 = null;
@@ -443,6 +554,7 @@ let wasmModule, wasm;
 function __wbg_finalize_init(instance, module) {
     wasm = instance.exports;
     wasmModule = module;
+    cachedUint32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     wasm.__wbindgen_start();
     return wasm;
