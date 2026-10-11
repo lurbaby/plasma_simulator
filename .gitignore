@@ -10,3 +10,6 @@
 *~
 fusionsim-data/
 __pycache__/
+# default output of `fusionsim gen` / `teach`
+/dataset/
+/teach/

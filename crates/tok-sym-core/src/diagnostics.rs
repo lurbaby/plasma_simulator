@@ -40,6 +40,7 @@ pub struct DiagnosticSignals {
 }
 
 /// Simple noise generator using xorshift.
+#[derive(Debug, Clone)]
 pub struct NoiseGen {
     state: u64,
 }

@@ -68,7 +68,8 @@ export default function ControlRoom() {
   const [plannerPreset, setPlannerPreset] = useState<PresetId>(handoff?.presetId ?? routePreset)
   const [hasCustomProgram, setHasCustomProgram] = useState(!!handoff)
   const [configOverride, setConfigOverride] = useState<MagneticConfig | null>(handoff?.configOverride ?? null)
-  const defaultFuel = (id: string): 'DD' | 'DT' => (id === 'iter' || id === 'jet') ? 'DT' : 'DD'
+  // JET runs DD by default, as in the hackathon's toksym (all models are trained on DD).
+  const defaultFuel = (id: string): 'DD' | 'DT' => (id === 'iter') ? 'DT' : 'DD'
   const [fuelType, setFuelType] = useState<'DD' | 'DT'>(defaultFuel(activeDevice))
 
   const devices = useMemo(() => getDevices(), [])

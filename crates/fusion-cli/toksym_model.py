@@ -67,6 +67,8 @@ def serve(model, stdin=None, stdout=None):
                 model.start_shot({k: ev[k] for k in ("shot_id", "dt", "duration", "scenario")})
         elif kind == "step":
             channels = {n: (float("nan") if v is None else float(v)) for n, v in zip(names, ev["v"])}
+            # fusionsim-only context (e.g. fixer multipliers); absent under toksym.
+            model.extra = ev.get("extra")
             ans = model.predict(ev["t"], channels)
             if isinstance(ans, dict):
                 say(json.dumps(_clean(ans)))

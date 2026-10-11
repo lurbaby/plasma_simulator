@@ -86,6 +86,8 @@ export interface Snapshot {
   t_trigger?: number | null
   t_tq?: number | null
   prog_kappa?: number
+  /** Fixer multipliers on the programme (1 = as programmed) */
+  scales?: { ip: number; ne_target: number; d2_puff: number; neon_puff: number; heating: number }
   prog_delta?: number
   disrupted: boolean
 

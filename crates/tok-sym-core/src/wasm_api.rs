@@ -7,7 +7,8 @@
 use wasm_bindgen::prelude::*;
 
 use crate::devices;
-use crate::simulation::{PulseProgram, Simulation, SimulationSnapshot};
+use crate::fixer::{apply_action, FixerConfig, Planner, ACTIONS};
+use crate::simulation::{ProgramScales, PulseProgram, Simulation, SimulationSnapshot};
 
 /// Generate a u64 seed from JS `Math.random()`.
 fn js_random_seed() -> u64 {
@@ -84,6 +85,7 @@ pub fn preset_density_limit_json(device_id: &str) -> String {
 #[wasm_bindgen]
 pub struct SimHandle {
     sim: Simulation,
+    planner: Option<Planner>,
 }
 
 #[wasm_bindgen]
@@ -100,7 +102,7 @@ impl SimHandle {
 
         let mut sim = Simulation::new(device, program);
         sim.seed_disruption(js_random_seed());
-        Ok(SimHandle { sim })
+        Ok(SimHandle { sim, planner: None })
     }
 
     /// Create from a device id + preset name ("hmode", "lmode", "density_limit").
@@ -118,7 +120,7 @@ impl SimHandle {
 
         let mut sim = Simulation::new(device, program);
         sim.seed_disruption(js_random_seed());
-        Ok(SimHandle { sim })
+        Ok(SimHandle { sim, planner: None })
     }
 
     /// Advance the simulation by `dt` seconds and return the snapshot as JSON.
@@ -211,6 +213,62 @@ impl SimHandle {
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         self.sim.seed_disruption(z ^ (z >> 31));
+    }
+
+    /// Start a fixer decision: copy the current state; candidates are then
+    /// evaluated one per `fixer_step()` call, so the work spreads over frames.
+    #[wasm_bindgen]
+    pub fn fixer_begin(&mut self, horizon: f64, dt: f64, alpha: f64) {
+        self.planner = Some(Planner::new(&self.sim, FixerConfig { horizon, dt, alpha }));
+    }
+
+    /// Evaluate the next candidate; returns true when the decision is ready.
+    #[wasm_bindgen]
+    pub fn fixer_step(&mut self) -> bool {
+        self.planner.as_mut().map(|p| p.step()).unwrap_or(false)
+    }
+
+    /// Progress of the current decision: [done, total].
+    #[wasm_bindgen]
+    pub fn fixer_progress(&self) -> Vec<u32> {
+        self.planner.as_ref().map(|p| vec![p.done() as u32, p.total() as u32]).unwrap_or_default()
+    }
+
+    /// The finished decision as JSON (and forget the planner), or "" if none.
+    #[wasm_bindgen]
+    pub fn fixer_result(&mut self) -> String {
+        match self.planner.take() {
+            Some(p) => serde_json::to_string(&p.finish()).unwrap_or_default(),
+            None => String::new(),
+        }
+    }
+
+    /// Set the controller multipliers on the programme (JSON ProgramScales).
+    #[wasm_bindgen]
+    pub fn set_scales_json(&mut self, json: &str) -> Result<(), JsValue> {
+        self.sim.scales = serde_json::from_str::<ProgramScales>(json)
+            .map_err(|e| JsValue::from_str(&format!("Bad scales JSON: {e}")))?;
+        Ok(())
+    }
+
+    /// Apply a fixer action by name (e.g. "ne_-10", "relax") to the current
+    /// multipliers — how a student model's decision reaches the plasma.
+    /// Returns false for an unknown name.
+    #[wasm_bindgen]
+    pub fn fixer_apply_action(&mut self, name: &str) -> bool {
+        match ACTIONS.iter().position(|a| *a == name) {
+            Some(i) => {
+                self.sim.scales = apply_action(i, &self.sim.scales);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Return every multiplier to 1 (the programme as written).
+    #[wasm_bindgen]
+    pub fn reset_scales(&mut self) {
+        self.sim.scales = ProgramScales::default();
     }
 
     /// Get the device wall outline as JSON array of [r, z] points.

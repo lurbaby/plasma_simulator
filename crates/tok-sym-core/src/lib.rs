@@ -80,6 +80,8 @@ pub mod channels;
 
 pub mod generator;
 
+pub mod fixer;
+
 /// WASM-bindgen API surface (JSON-based, feature-gated).
 #[cfg(feature = "wasm")]
 mod wasm_api;

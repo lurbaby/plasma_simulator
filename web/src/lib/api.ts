@@ -86,6 +86,9 @@ export interface LiveInfo {
   risk_total?: number
   share_pct?: Shares
   drivers?: { fgw?: number; q95?: number; frad?: number; beta_n?: number }
+  /** Fixer student: chosen action and the cost of every action */
+  action?: string
+  costs?: Record<string, number>
 }
 
 export interface RunReport {
@@ -157,7 +160,7 @@ export const api = {
   },
   liveStart: (model: string, duration: number, scenario = 'interactive') =>
     call<{ ok: boolean; model: string | null }>('/api/live/start', { model, duration, scenario }),
-  liveStep: (steps: { t: number; v: number[] }[]) => call<{ p: number[]; info?: (LiveInfo | null)[] }>('/api/live/step', { steps }),
+  liveStep: (steps: { t: number; v: number[]; extra?: unknown }[]) => call<{ p: number[]; info?: (LiveInfo | null)[] }>('/api/live/step', { steps }),
   liveStop: () => call('/api/live/stop', {}),
 }
 

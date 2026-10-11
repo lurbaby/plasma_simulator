@@ -396,6 +396,8 @@ pub struct SimulationSnapshot {
     pub disrupted: bool,
     /// Live actuator overrides active at this step
     pub overrides: ProgramOverrides,
+    /// Controller multipliers on the programme
+    pub scales: ProgramScales,
     /// The hundred toksym-compatible measured channels (see `channels.rs`)
     pub channels: Vec<f64>,
     /// Disruption timeline: stochastic trigger, thermal quench (s)
@@ -538,7 +540,41 @@ impl ProgramOverrides {
     }
 }
 
+/// Multipliers on the programmed waveforms, set by a controller (the fixer).
+///
+/// Unlike an override, a scale keeps the programme's shape — ramps and the
+/// planned termination still happen, just at a different level — so a
+/// correction does not break the rest of the pulse. 1.0 = as programmed.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ProgramScales {
+    pub ip: f64,
+    pub ne_target: f64,
+    pub d2_puff: f64,
+    pub neon_puff: f64,
+    /// NBI, ECH and ICRH together
+    pub heating: f64,
+}
+
+impl Default for ProgramScales {
+    fn default() -> Self {
+        ProgramScales { ip: 1.0, ne_target: 1.0, d2_puff: 1.0, neon_puff: 1.0, heating: 1.0 }
+    }
+}
+
+impl ProgramScales {
+    pub fn apply(&self, prog: &mut ProgramValues) {
+        prog.ip *= self.ip;
+        prog.ne_target *= self.ne_target;
+        prog.d2_puff *= self.d2_puff;
+        prog.neon_puff *= self.neon_puff;
+        prog.p_nbi *= self.heating;
+        prog.p_ech *= self.heating;
+        prog.p_ich *= self.heating;
+    }
+}
+
 /// The main simulation engine.
+#[derive(Clone)]
 pub struct Simulation {
     pub device: Device,
     pub program: PulseProgram,
@@ -548,6 +584,20 @@ pub struct Simulation {
     pub overrides: ProgramOverrides,
     /// Build flux surfaces and separatrix in snapshots (off for headless runs)
     pub compute_geometry: bool,
+    /// Controller multipliers on the programme (see [`ProgramScales`]).
+    pub scales: ProgramScales,
+    /// Roll the disruption dice. Off in look-ahead copies, which integrate λ instead.
+    pub stochastic: bool,
+    /// Compute the hundred instrument channels each step (off in look-ahead copies).
+    pub compute_channels: bool,
+    /// Look-ahead copy started at this time. From then on the machine
+    /// schedule (Iₚ, Bₜ, heating, shape) follows the *plan* — what the control
+    /// system knows in advance — carrying over the current deviation from it
+    /// (e.g. a heating fault) as a ratio, while gas (density target, D₂, neon)
+    /// is held at its current value: disturbances are not known in advance.
+    pub freeze_program_at: Option<f64>,
+    /// The planned programme without unplanned disturbances (None = `program`).
+    pub plan: Option<PulseProgram>,
 
     // Physics models
     transport: TransportModel,
@@ -597,6 +647,11 @@ impl Simulation {
             status: SimulationStatus::Ready,
             overrides: ProgramOverrides::default(),
             compute_geometry: true,
+            scales: ProgramScales::default(),
+            stochastic: true,
+            compute_channels: true,
+            freeze_program_at: None,
+            plan: None,
             transport: TransportModel::default(),
             profiles,
             disruption: DisruptionModel::default(),
@@ -646,13 +701,48 @@ impl Simulation {
         self.wall_contact = false;
         self.risk_at_trigger = 0.0;
         self.overrides = ProgramOverrides::default();
+        self.scales = ProgramScales::default();
+    }
+
+    /// Current disruption intensity λ, 1/s.
+    pub fn risk(&self) -> f64 {
+        self.disruption.risk
     }
 
     /// Programmed values at time `t` with live overrides applied.
     pub fn effective_values(&self, t: f64) -> ProgramValues {
-        let mut prog = self.program.values_at(t);
+        let mut prog = self.programmed_at(t);
+        self.scales.apply(&mut prog);
         self.overrides.apply(&mut prog);
         prog
+    }
+
+    /// The programme as this engine believes it at `t` (before scales and
+    /// overrides): the real programme, or in a look-ahead copy the plan with
+    /// the current deviation carried over and gas held (see `freeze_program_at`).
+    fn programmed_at(&self, t: f64) -> ProgramValues {
+        let t0 = match self.freeze_program_at {
+            Some(t0) if t > t0 => t0,
+            _ => return self.program.values_at(t),
+        };
+        let now = self.program.values_at(t0);
+        let plan = self.plan.as_ref().unwrap_or(&self.program);
+        let (p0, pt) = (plan.values_at(t0), plan.values_at(t));
+        let follow = |actual: f64, plan_now: f64, plan_t: f64| {
+            if plan_now.abs() > 1e-6 { plan_t * actual / plan_now } else if actual.abs() > 1e-6 { actual } else { plan_t }
+        };
+        ProgramValues {
+            ip: follow(now.ip, p0.ip, pt.ip),
+            bt: follow(now.bt, p0.bt, pt.bt),
+            p_nbi: follow(now.p_nbi, p0.p_nbi, pt.p_nbi),
+            p_ech: follow(now.p_ech, p0.p_ech, pt.p_ech),
+            p_ich: follow(now.p_ich, p0.p_ich, pt.p_ich),
+            kappa: follow(now.kappa, p0.kappa, pt.kappa),
+            delta: follow(now.delta, p0.delta, pt.delta),
+            ne_target: now.ne_target,
+            d2_puff: now.d2_puff,
+            neon_puff: now.neon_puff,
+        }
     }
 
     /// Override one actuator channel from now on (see [`ProgramOverrides::CHANNELS`]).
@@ -701,7 +791,7 @@ impl Simulation {
         // it so that a controller lowering Ip does not switch off the
         // stochastic disruption trigger.
         let prog = self.effective_values(self.time);
-        let scheduled_ip = PulseProgram::interpolate(&self.program.ip, self.time);
+        let scheduled_ip = self.programmed_at(self.time).ip;
 
         // ── Transport step ──
         self.transport
@@ -762,7 +852,7 @@ impl Simulation {
                 self.disruption.risk *= ramp_frac;
                 self.disruption.risk = self.disruption.risk.max(0.005);
             } else {
-                if self.disruption.check_trigger(dt) {
+                if self.stochastic && self.disruption.check_trigger(dt) {
                     self.t_trigger = Some(self.time);
                     self.risk_at_trigger = self.disruption.risk;
                 }
@@ -935,8 +1025,10 @@ impl Simulation {
         }
 
         let mut snap = self.snapshot();
-        self.last_channels = self.channels.step(&snap, dt, self.device.a);
-        snap.channels = self.last_channels.to_vec();
+        if self.compute_channels {
+            self.last_channels = self.channels.step(&snap, dt, self.device.a);
+            snap.channels = self.last_channels.to_vec();
+        }
         snap
     }
 
@@ -1130,6 +1222,7 @@ impl Simulation {
             risk_radiation: self.disruption.risk_radiation,
             risk_locked_mode: self.disruption.risk_locked_mode,
             overrides: self.overrides.clone(),
+            scales: self.scales,
             channels: self.last_channels.to_vec(),
             t_trigger: self.t_trigger,
             t_tq: self.t_tq,

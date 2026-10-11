@@ -360,7 +360,12 @@ fn handle(st: &Arc<State>, mut req: Request) {
                     let mut failure = None;
                     for s in steps {
                         let v: Vec<f64> = s["v"].as_array().map(|a| a.iter().map(|x| x.as_f64().unwrap_or(f64::NAN)).collect()).unwrap_or_default();
-                        match l.model.step(s["t"].as_f64().unwrap_or(0.0), &v, Duration::from_secs(1)) {
+                        let t = s["t"].as_f64().unwrap_or(0.0);
+                        let r = match s.get("extra") {
+                            Some(x) if !x.is_null() => l.model.step_extra(t, &v, x.clone(), Duration::from_secs(1)),
+                            _ => l.model.step(t, &v, Duration::from_secs(1)),
+                        };
+                        match r {
                             Ok((ans, _)) => {
                                 ps.push(ans.p);
                                 infos.push(ans.info.unwrap_or(Value::Null));

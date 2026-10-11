@@ -261,6 +261,18 @@ impl ModelProcess {
         Ok((parse_answer(&line)?, dt))
     }
 
+    /// A step with extra context for the model (fusionsim only): e.g. the
+    /// fixer's current programme multipliers. The wrapper exposes it as
+    /// `model.extra` before calling `predict`.
+    pub fn step_extra(&mut self, t: f64, v: &[f64], extra: serde_json::Value, timeout: Duration) -> Result<(Answer, Duration), String> {
+        let vals: Vec<serde_json::Value> = v.iter().map(|x| if x.is_finite() { json!(x) } else { serde_json::Value::Null }).collect();
+        let t0 = Instant::now();
+        self.send(&json!({"type": "step", "t": (t * 1e4).round() / 1e4, "v": vals, "extra": extra}).to_string())?;
+        let line = self.answer(timeout)?;
+        let dt = t0.elapsed();
+        Ok((parse_answer(&line)?, dt))
+    }
+
     pub fn shot_end(&mut self, shot_id: u64) -> Result<(), String> {
         self.send(&json!({"type": "shot_end", "shot_id": shot_id}).to_string())
     }

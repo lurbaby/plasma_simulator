@@ -19,7 +19,34 @@ const ACTUATORS: [OverrideChannel, string, string, number, number, number, (s: S
 ]
 
 type Source = 'model' | 'engine'
+type Mode = 'fixer' | 'rules'
 interface Action { t: number; text: string }
+
+// ── Fixer (look-ahead on engine copies, crates/tok-sym-core/src/fixer.rs) ──
+const ACTION_UA: Record<string, string> = {
+  none: 'нічого не змінювати',
+  'ne_-10': 'густина й D₂ −10 %',
+  'ne_-20': 'густина й D₂ −20 %',
+  neon_off: 'вимкнути неон',
+  'ip_-10': 'струм Iₚ −10 %',
+  'heat_+20': 'нагрів +20 %',
+  'heat_-20': 'нагрів −20 %',
+  relax: 'повернути уставки ближче до програми',
+}
+interface Variant { action: string; p: number; loss: number; cost: number; w_mean: number; hmode: number; lambda_max: number
+  scales: { ip: number; ne_target: number; d2_puff: number; neon_puff: number; heating: number } }
+interface Decision { t: number; best: number; variants: Variant[] }
+type Phase = 'normal' | 'alert' | 'planning' | 'applied' | 'stable' | 'disrupted'
+interface FixEvent { t: number; kind: Phase; text: string }
+
+const PHASE_UI: Record<Phase, { label: string; color: string; bg: string }> = {
+  normal: { label: 'НОРМА', color: '#34d399', bg: 'rgba(6,78,59,0.85)' },
+  alert: { label: '⚠ ПРОГНОЗ ЗРИВУ', color: '#fbbf24', bg: 'rgba(120,53,15,0.9)' },
+  planning: { label: '🔧 FIXER РАХУЄ', color: '#60a5fa', bg: 'rgba(30,58,138,0.9)' },
+  applied: { label: '✅ ЗМІНИ ВНЕСЕНО', color: '#22d3ee', bg: 'rgba(22,78,99,0.9)' },
+  stable: { label: '🛡 ПЛАЗМУ СТАБІЛІЗОВАНО', color: '#34d399', bg: 'rgba(6,78,59,0.9)' },
+  disrupted: { label: '💥 ЗРИВ', color: '#f87171', bg: 'rgba(127,29,29,0.95)' },
+}
 interface Advice { mech: Mechanism; basis: string; set: [OverrideChannel, number][]; text: string }
 
 /** λ split from the engine's own risk factors (the "oracle"), as ImpactNet defines shares. */
@@ -119,14 +146,40 @@ export default function ControlPanel({ snapshot, controls, running, onClose }: {
   const [minLam, setMinLam] = useState(0.02)
   const [log, setLog] = useState<Action[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [mode, setMode] = useState<Mode>('fixer')
+  const [decider, setDecider] = useState<'oracle' | 'student'>('oracle')
+  const lastInfo = useRef<LiveInfo | null>(null)
+  const [noAction, setNoAction] = useState(false)
+  const [alpha, setAlpha] = useState(0.5)
+  const [horizon, setHorizon] = useState(1.0)
+  const [armSec, setArmSec] = useState(2.0)
+  const [period, setPeriod] = useState(0.25)
+  const [phase, setPhase] = useState<Phase>('normal')
+  const [phaseText, setPhaseText] = useState('')
+  const [decision, setDecision] = useState<Decision | null>(null)
+  const [events, setEvents] = useState<FixEvent[]>([])
+  const [progress, setProgress] = useState<[number, number] | null>(null)
+  const armedUntil = useRef(-Infinity)
+  const planning = useRef(false)
+  const lastDecisionT = useRef(-Infinity)
+  const appliedAt = useRef<number | null>(null)
+  const lastTime = useRef(0)
+  const phaseRef = useRef<Phase>('normal')
 
-  const queue = useRef<{ t: number; v: number[] }[]>([])
+  const queue = useRef<{ t: number; v: number[]; extra?: unknown }[]>([])
   const inFlight = useRef(false)
   const lastAction = useRef(-Infinity)
   const lastSnap = useRef<Snapshot | null>(null)
-  const cfg = useRef({ auto, threshold, hold, minLam, source, connected })
-  useEffect(() => { cfg.current = { auto, threshold, hold, minLam, source, connected } },
-    [auto, threshold, hold, minLam, source, connected])
+  const cfg = useRef({ auto, threshold, hold, minLam, source, connected, mode, alpha, horizon, armSec, period, decider })
+  useEffect(() => { cfg.current = { auto, threshold, hold, minLam, source, connected, mode, alpha, horizon, armSec, period, decider } },
+    [auto, threshold, hold, minLam, source, connected, mode, alpha, horizon, armSec, period, decider])
+
+  const go = useCallback((ph: Phase, t: number, text: string, event = true) => {
+    phaseRef.current = ph
+    setPhase(ph)
+    setPhaseText(text)
+    if (event) setEvents((e) => [{ t, kind: ph, text }, ...e].slice(0, 50))
+  }, [])
 
   useEffect(() => {
     api.models().then((m) => {
@@ -165,10 +218,83 @@ export default function ControlPanel({ snapshot, controls, running, onClose }: {
     const mech = useShares ? dominantOf(sh)! : nearestLimit(s)
     const a = advise(mech, s, useShares ? (c.source === 'model' ? 'за моделлю' : 'за рушієм') : 'найближча межа')
     setAdvice(a)
+    if (s.t_trigger != null || s.disrupted) {
+      if (phaseRef.current !== 'disrupted') go('disrupted', s.time, 'жереб кинуто — зрив уже не зупинити (передвісник → гасіння)')
+      return
+    }
+    if (c.mode === 'fixer') {
+      // The alarm arms the fixer; it keeps deciding for armSec after the last
+      // alarm, so it can also give the programme back (relax) once safe.
+      if (prob > c.threshold) {
+        if (s.time > armedUntil.current && phaseRef.current !== 'planning') {
+          go('alert', s.time, `p = ${prob.toFixed(2)} > ${c.threshold}; причина: ${MECH_INFO[mech].short}`)
+        }
+        armedUntil.current = s.time + c.armSec
+      }
+      const armed = s.time <= armedUntil.current
+      const sim = controls.getSim()
+      if (c.decider === 'student') {
+        // The student model already chose an action from the instruments; apply it.
+        if (c.auto && armed && sim && s.time - lastDecisionT.current >= c.period) {
+          lastDecisionT.current = s.time
+          const info = lastInfo.current
+          const act = info?.action
+          if (act && act !== 'none' && sim.fixer_apply_action(act)) {
+            appliedAt.current = s.time
+            const costs = info?.costs ?? {}
+            const text = `${ACTION_UA[act] ?? act} (учень: ціна ${(costs[act] ?? 0).toFixed(3)} проти «нічого» ${(costs.none ?? 0).toFixed(3)})`
+            go('applied', s.time, text)
+            note(s.time, `УЧЕНЬ ${text}`)
+          }
+        }
+      } else if (c.auto && armed && sim && !planning.current && s.time - lastDecisionT.current >= c.period) {
+        planning.current = true
+        lastDecisionT.current = s.time
+        sim.fixer_begin(c.horizon, 0.02, c.alpha)
+        // Keep "changes applied" on the banner; later re-plans show only as the progress bar.
+        if (phaseRef.current !== 'applied') {
+          go('planning', s.time, `перебір 8 дій на копіях стану, горизонт ${c.horizon} с`, false)
+        }
+      }
+      if (!armed && (phaseRef.current === 'applied' || phaseRef.current === 'alert')) {
+        go(appliedAt.current !== null ? 'stable' : 'normal', s.time,
+          appliedAt.current !== null ? `ризик знизився (p = ${prob.toFixed(2)}), розряд іде далі` : '')
+      }
+      return
+    }
     if (!a || !c.auto || prob <= c.threshold || s.time - lastAction.current < c.hold) return
     lastAction.current = s.time
     apply(a, s.time, prob)
-  }, [apply])
+  }, [apply, go, controls, note])
+
+  /** Advance a running fixer decision by one candidate (called every frame). */
+  const pump = useCallback(() => {
+    const sim = controls.getSim()
+    if (!planning.current || !sim) return
+    const ready = sim.fixer_step()
+    const pr = sim.fixer_progress()
+    if (pr.length === 2) setProgress([pr[0], pr[1]])
+    if (!ready) return
+    planning.current = false
+    setProgress(null)
+    const raw = sim.fixer_result()
+    if (!raw) return
+    const d = JSON.parse(raw) as Decision
+    setDecision(d)
+    const best = d.variants[d.best]
+    const none = d.variants[0]
+    if (d.best !== 0) {
+      sim.set_scales_json(JSON.stringify(best.scales))
+      appliedAt.current = d.t
+      const text = `${ACTION_UA[best.action] ?? best.action}: P(зрив за ${cfg.current.horizon} с) ${(none.p * 100).toFixed(1)}% → ${(best.p * 100).toFixed(1)}%, відхилення від програми ${(best.loss * 100).toFixed(1)}%`
+      go('applied', d.t, text)
+      note(d.t, `FIXER ${text}`)
+    } else if (phaseRef.current === 'planning') {
+      go(appliedAt.current !== null ? 'applied' : 'alert', d.t, appliedAt.current !== null
+        ? `зміни тримаються; нових дій не треба (P = ${(none.p * 100).toFixed(1)}%)`
+        : `fixer: краще нічого не міняти (P = ${(none.p * 100).toFixed(1)}%)`, false)
+    }
+  }, [controls, go, note])
 
   const flush = useCallback(async () => {
     if (inFlight.current || queue.current.length === 0 || !cfg.current.connected) return
@@ -181,6 +307,10 @@ export default function ControlPanel({ snapshot, controls, running, onClose }: {
       // For decisions use the instantaneous probability if the model sends one (p_now),
       // not a running maximum that never falls after an action.
       const pNow = last?.p_now ?? r.p[r.p.length - 1] ?? 0
+      if (last) {
+        lastInfo.current = last
+        setNoAction(last.action === undefined)
+      }
       setPHist((h) => [...h, ...r.p.filter((_, i) => i % 3 === 0)].slice(-400))
       if (lastSnap.current) update(pNow, last?.risk_total ?? null, last?.share_pct ?? null, lastSnap.current)
     } catch (e) {
@@ -196,16 +326,23 @@ export default function ControlPanel({ snapshot, controls, running, onClose }: {
   useEffect(() => controls.subscribeSteps((snaps) => {
     const s = snaps[snaps.length - 1]
     if (!s) return
+    if (s.time < lastTime.current) {
+      // Reset / new pulse: start the story over.
+      armedUntil.current = -Infinity; planning.current = false; lastDecisionT.current = -Infinity
+      appliedAt.current = null; setEvents([]); setDecision(null); go('normal', 0, '', false)
+    }
+    lastTime.current = s.time
     lastSnap.current = s
+    pump()
     if (cfg.current.source === 'engine') {
       const prob = 1 - Math.exp(-s.disruption_risk * 1.0)
       setPHist((h) => [...h, prob].slice(-400))
       update(prob, s.disruption_risk, engineShares(s), s)
     } else if (cfg.current.connected) {
-      for (const x of snaps) if (x.channels) queue.current.push({ t: x.time, v: x.channels })
+      for (const x of snaps) if (x.channels) queue.current.push({ t: x.time, v: x.channels, extra: { scales: x.scales } })
       flush()
     }
-  }), [controls, flush, update])
+  }), [controls, flush, update, pump, go])
 
   const connect = async () => {
     setError(null)
@@ -232,7 +369,23 @@ export default function ControlPanel({ snapshot, controls, running, onClose }: {
   const spark = pHist.length > 1
     ? pHist.map((v, i) => `${(i / (pHist.length - 1)) * 260},${40 - v * 40}`).join(' ') : ''
 
+  const ui = PHASE_UI[phase]
   return (
+    <>
+    <div className="fixed left-1/2 -translate-x-1/2 top-12 z-[56] flex items-center gap-3 px-3 py-1.5 rounded-md border shadow-lg shadow-black/50 max-w-[60vw]"
+      style={{ background: ui.bg, borderColor: ui.color }}>
+      <span className="font-bold text-sm whitespace-nowrap" style={{ color: ui.color }}>{ui.label}</span>
+      <span className="text-[11px] text-gray-100 truncate">{phaseText}</span>
+      <span className="font-mono text-[11px] tabular-nums text-gray-200 whitespace-nowrap">p {p.toFixed(2)}</span>
+      {events.length > 0 && (
+        <span className="hidden xl:flex gap-1">
+          {events.slice(0, 6).reverse().map((e, i) => (
+            <span key={i} className="text-[9px] font-mono px-1 rounded" style={{ color: PHASE_UI[e.kind].color, border: `1px solid ${PHASE_UI[e.kind].color}` }}
+              title={e.text}>{e.t.toFixed(1)}с</span>
+          ))}
+        </span>
+      )}
+    </div>
     <div className="fixed right-2 top-14 bottom-2 z-[55] w-[360px] flex flex-col bg-[#0d1117]/95 border border-gray-700 rounded-lg shadow-2xl shadow-black/60">
       <div className="flex items-center justify-between p-2 border-b border-gray-800">
         <div>
@@ -282,7 +435,87 @@ export default function ControlPanel({ snapshot, controls, running, onClose }: {
         </section>
 
         <section className="space-y-1.5 border-t border-gray-800 pt-2">
-          <span className="text-[10px] text-gray-500 uppercase tracking-wider">2. Порадник і автокерування</span>
+          <span className="text-[10px] text-gray-500 uppercase tracking-wider">2. Запобігання зриву</span>
+          <div className="flex rounded overflow-hidden border border-gray-700">
+            {([['fixer', 'Fixer (прорахунок наперед)'], ['rules', 'Простий порадник']] as [Mode, string][]).map(([k, l]) => (
+              <button key={k} onClick={() => setMode(k)}
+                title={k === 'fixer'
+                  ? 'Після сигналу моделі копіює стан і проганяє 8 можливих дій на 1 с вперед; застосовує дію з найменшою ціною «ризик + α·відхилення від програми»'
+                  : 'Одна дія з таблиці за головним механізмом, без прорахунку наслідків'}
+                className={`flex-1 px-2 py-1 text-[11px] cursor-pointer ${mode === k ? 'bg-amber-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>{l}</button>
+            ))}
+          </div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} className="accent-amber-500" />
+            <span className="text-[11px] text-gray-200">{mode === 'fixer' ? 'Увімкнути fixer (діє сам після сигналу p > порогу)' : 'Автокерування: застосовувати рекомендацію, коли p > порогу'}</span>
+          </label>
+          {mode === 'fixer' ? (
+            <div className="space-y-1.5">
+              <div className="flex rounded overflow-hidden border border-gray-700">
+                {([['oracle', 'Вирішує оракул (копії)'], ['student', 'Вирішує учень (модель)']] as ['oracle' | 'student', string][]).map(([k, l]) => (
+                  <button key={k} onClick={() => setDecider(k)}
+                    title={k === 'oracle'
+                      ? 'Прорахунок 8 дій на копіях стану рушія — ідеальний двійник, верхня межа'
+                      : 'Дію обирає модель-учень лише з 100 приладів (models/fixer_student): підключіть її в розділі 1 як «Ваша модель»'}
+                    className={`flex-1 px-2 py-0.5 text-[10px] cursor-pointer ${decider === k ? 'bg-blue-700 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>{l}</button>
+                ))}
+              </div>
+              {decider === 'student' && connected && noAction && (
+                <p className="text-[9px] text-red-400">Під'єднана модель не повертає дію (action) — для учня оберіть fixer_student.</p>
+              )}
+              {decider === 'student' && (source !== 'model' || !connected) && (
+                <p className="text-[9px] text-amber-400">Для учня: розділ 1 → «Ваша модель» → fixer_student → «Під'єднати».</p>
+              )}
+              <div className="grid grid-cols-3 gap-2">
+                {([
+                  ['Поріг сигналу p', 'Сигнал моделі (або λ рушія), що вмикає fixer', threshold, setThreshold, 0.05, 0, 1],
+                  ['α (ціна відхилення)', 'Більше α — fixer обережніший і менше змінює програму', alpha, setAlpha, 0.1, 0, 5],
+                  ['Горизонт, с', 'На скільки секунд вперед проганяється кожна дія', horizon, setHorizon, 0.25, 0.25, 3],
+                  ['Період рішень, с', 'Як часто fixer перераховує, поки активний', period, setPeriod, 0.05, 0.1, 2],
+                  ['Активний після сигналу, с', 'Скільки fixer працює після останнього сигналу (щоб і повернути уставки)', armSec, setArmSec, 0.5, 0.5, 10],
+                ] as [string, string, number, (v: number) => void, number, number, number][]).map(([label, hint, v, setv, step, min, max]) => (
+                  <label key={label} className="block" title={hint}><span className="text-[9px] text-gray-500">{label}</span>
+                    <input type="number" min={min} max={max} step={step} value={v} onChange={(e) => setv(Number(e.target.value))}
+                      className="w-full bg-black border border-gray-700 rounded px-1.5 py-0.5 font-mono text-[11px]" /></label>
+                ))}
+              </div>
+              {progress && (
+                <div className="h-1 bg-gray-800 rounded overflow-hidden">
+                  <div className="h-full bg-blue-500" style={{ width: `${(progress[0] / progress[1]) * 100}%` }} />
+                </div>
+              )}
+              {decision ? (
+                <div className="bg-gray-900 rounded p-1.5">
+                  <div className="text-[9px] text-gray-500 mb-1">Останнє рішення, t = {decision.t.toFixed(2)} с · P — ймовірність зриву за горизонт, відхил. — від запланованого W</div>
+                  <table className="w-full text-[10px] font-mono tabular-nums">
+                    <thead><tr className="text-gray-500"><td>дія</td><td className="text-right">P</td><td className="text-right">відхил.</td><td className="text-right">ціна</td></tr></thead>
+                    <tbody>
+                      {decision.variants.map((v, i) => (
+                        <tr key={v.action} className={i === decision.best ? 'text-amber-300' : 'text-gray-400'}>
+                          <td className="font-sans">{i === decision.best ? '▶ ' : ''}{ACTION_UA[v.action] ?? v.action}</td>
+                          <td className="text-right">{(v.p * 100).toFixed(1)}%</td>
+                          <td className="text-right">{(v.loss * 100).toFixed(1)}%</td>
+                          <td className="text-right">{v.cost.toFixed(3)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : <p className="text-[9px] text-gray-600">Fixer чекає сигналу моделі. Без сигналу нічого не змінює.</p>}
+              {snapshot?.scales && (
+                <div className="grid grid-cols-5 gap-1 text-[9px] font-mono text-gray-500" title="Множники fixer на програму розряду (1 = як заплановано)">
+                  <span>Iₚ×{snapshot.scales.ip.toFixed(2)}</span><span>n̄ₑ×{snapshot.scales.ne_target.toFixed(2)}</span>
+                  <span>D₂×{snapshot.scales.d2_puff.toFixed(2)}</span><span>Ne×{snapshot.scales.neon_puff.toFixed(2)}</span>
+                  <span>нагр×{snapshot.scales.heating.toFixed(2)}</span>
+                </div>
+              )}
+              <p className="text-[9px] text-gray-600 leading-snug">
+                Fixer бачить справжній стан рушія (це «ідеальний двійник» — верхня межа можливого). Він змінює не саму уставку, а множник на
+                програму, тож заплановані рампи й завершення розряду зберігаються; дія «повернути уставки» віддає продуктивність, коли загроза минула.
+              </p>
+            </div>
+          ) : (
+            <>
           <div className="bg-gray-900 rounded p-2 text-[10px] space-y-1">
             {advice ? (
               <>
@@ -299,10 +532,6 @@ export default function ControlPanel({ snapshot, controls, running, onClose }: {
               </>
             ) : <span className="text-gray-500">Запустіть розряд (Start) — тут з'явиться рекомендація.</span>}
           </div>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} className="accent-amber-500" />
-            <span className="text-[11px] text-gray-200">Автокерування: застосовувати рекомендацію, коли p &gt; порогу</span>
-          </label>
           <div className="grid grid-cols-3 gap-2">
             <label className="block" title="Коли p перевищує цей поріг, автокерування діє"><span className="text-[9px] text-gray-500">Поріг p</span>
               <input type="number" min={0} max={1} step={0.05} value={threshold} onChange={(e) => setThreshold(Number(e.target.value))}
@@ -323,6 +552,8 @@ export default function ControlPanel({ snapshot, controls, running, onClose }: {
               <tr><td className="pr-2" style={{ color: MECH_INFO.other.color }}>Інші</td><td>дії немає (передвісник або фон)</td></tr>
             </tbody>
           </table>
+            </>
+          )}
           {!running && <p className="text-[9px] text-gray-600">Натисніть Start угорі, щоб пустити розряд.</p>}
           <div className="max-h-36 overflow-y-auto space-y-0.5">
             {log.map((a, i) => (
@@ -372,5 +603,6 @@ export default function ControlPanel({ snapshot, controls, running, onClose }: {
         {error && <pre className="text-[10px] text-red-400 whitespace-pre-wrap">{error}</pre>}
       </div>
     </div>
+    </>
   )
 }
