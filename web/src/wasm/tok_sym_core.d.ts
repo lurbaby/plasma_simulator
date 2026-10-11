@@ -88,6 +88,15 @@ export class SimHandle {
      */
     set_scales_json(json: string): void;
     /**
+     * Split off the shadow plasma (a copy without interventions, same random
+     * draws) — call right *before* the first intervention. No-op if one exists.
+     */
+    shadow_start(): void;
+    /**
+     * The shadow's story as JSON (see `ShadowStatus`), or "" if none.
+     */
+    shadow_status_json(): string;
+    /**
      * Get the current status as a string.
      */
     status(): string;
@@ -165,6 +174,8 @@ export interface InitOutput {
     readonly simhandle_set_override: (a: number, b: number, c: number, d: number) => [number, number];
     readonly simhandle_set_program_json: (a: number, b: number, c: number) => [number, number];
     readonly simhandle_set_scales_json: (a: number, b: number, c: number) => [number, number];
+    readonly simhandle_shadow_start: (a: number) => void;
+    readonly simhandle_shadow_status_json: (a: number) => [number, number];
     readonly simhandle_status: (a: number) => [number, number];
     readonly simhandle_step: (a: number, b: number) => [number, number];
     readonly simhandle_time: (a: number) => number;

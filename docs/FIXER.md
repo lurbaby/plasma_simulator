@@ -177,8 +177,8 @@ venv/bin/python student/compare.py fixer_data/test_none=без fixer_data/test_r
 `OMP_NUM_THREADS=1` обов'язково при паралельних прогонах: інакше кожен процес sklearn бере всі ядра,
 модель «мовчить» понад тайм-аут.
 
-**У браузері:** «Керування» → розділ 1 «Ваша модель» → `fixer_student` → «Під'єднати» (кілька секунд,
-вантажиться sklearn) → розділ 2 Fixer → «Вирішує учень (модель)» → «Увімкнути fixer» → Start.
+**У браузері:** «Керування» → модель `v8_fixer` (обрана за замовчуванням; містить того самого учня) →
+«Під'єднати» (кілька секунд, вантажиться sklearn) → Start. Fixer увімкнено за замовчуванням.
 Сервер має бути запущений з Python, де є scikit-learn:
 `OMP_NUM_THREADS=1 ./target/release/fusionsim serve --models-dir ../models --python ../fusion_work/venv/bin/python`.
 
@@ -195,14 +195,27 @@ venv/bin/python student/compare.py fixer_data/test_none=без fixer_data/test_r
 | базовий план без збурень | `crates/tok-sym-core/src/generator.rs` (`ShotSpec::plan`) |
 | `fusionsim teach` (режими teacher / label / student / rules / none) | `crates/fusion-cli/src/teach.rs` |
 | учень: ознаки, дії, модель | `../models/fixer_student/{features,actions,model}.py`, навчання — `fusion_work/student/{build,train,compare}.py` |
-| WASM: `fixer_begin/step/progress/result`, `fixer_apply_action`, `set_scales_json`, `reset_scales` | `crates/tok-sym-core/src/wasm_api.rs` |
-| панель, банер, стан-машина | `web/src/components/ControlPanel.tsx` |
+| WASM: `fixer_begin/step/progress/result`, `fixer_apply_action`, `set_scales_json`, `reset_scales`, `shadow_start`, `shadow_status_json` | `crates/tok-sym-core/src/wasm_api.rs` |
+| тінь (доказ відвернутого зриву) | `crates/tok-sym-core/src/shadow.rs` |
+| повний ланцюг для панелі | `../models/v8_fixer/model.py` |
+| панель, банер, спливаючі вікна, стан-машина | `web/src/components/ControlPanel.tsx` |
 
-## 7. Поради з використання в браузері
+## 7. У браузері (демонстрація)
 
-- **Поріг сигналу нижче — більше часу на дію.** Густина реагує за ~0,3 с, неон за ~0,5 с; при
-  p ≈ 0,3 (λ ≈ 0,4 /с) лишається кілька відсотків шансу, що жереб упаде раніше, ніж дія подіє.
-  Для демонстрації краще поріг 0,1–0,2.
-- Жереб у браузері щоразу новий: один і той самий сценарій може раз урятуватися, раз — ні. Для
-  статистики — `fusionsim teach` з фіксованими seed.
-- Після жереба (банер «💥 ЗРИВ») зрив не зупинити: передвісник 50–100 мс → гасіння.
+Ланцюг у панелі «Керування» — модель **`v8_fixer`** (`../models/v8_fixer`): тривога v8, причини
+ImpactNet, дія — модель-учень. Fixer у браузері **не** використовує копії-оракул: дію обирає модель
+лише з 100 приладів. Сигнал для fixer: p_now = max(миттєва EMA v8, 1 − e^(−λ_ImpactNet·1 с)).
+Порядок, банер і спливаючі вікна — [USER_GUIDE.md](USER_GUIDE.md), розд. 5; ролі моделей — [MODELS.md](MODELS.md).
+Новий розряд у браузері (Reset, повторний Start) скидає стан моделі через `POST /api/live/shot`.
+
+**Тінь — доказ відвернутого зриву** (`crates/tok-sym-core/src/shadow.rs`, WASM `shadow_start`,
+`shadow_status_json`): перед першим втручанням рушій копіюється разом з генератором випадкових
+подій; копія крокує синхронно з плазмою, але без змін уставок. Тест
+`untouched_shadow_repeats_the_real_plasma` перевіряє, що без втручань тінь повторює розряд до кроку
+(той самий момент зриву). Отже «тінь зірвалася — плазма ні» означає: зрив відвернуло втручання.
+Додатково тінь накопичує P = 1 − e^(−∫λ dt) для обох плазм з моменту втручання.
+
+Поради:
+- поріг сигналу 0,1–0,2: густина реагує за ~0,3 с, неон за ~0,5 с — пізній сигнал лишає мало часу;
+- після жереба (✖ ЗРИВ) зрив не зупинити: передвісник 50–100 мс → гасіння;
+- для статистики — `fusionsim teach` з фіксованими seed, а не браузер (жереб там щоразу новий).

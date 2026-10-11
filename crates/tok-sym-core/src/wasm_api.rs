@@ -8,6 +8,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::devices;
 use crate::fixer::{apply_action, FixerConfig, Planner, ACTIONS};
+use crate::shadow::Shadow;
 use crate::simulation::{ProgramScales, PulseProgram, Simulation, SimulationSnapshot};
 
 /// Generate a u64 seed from JS `Math.random()`.
@@ -86,6 +87,7 @@ pub fn preset_density_limit_json(device_id: &str) -> String {
 pub struct SimHandle {
     sim: Simulation,
     planner: Option<Planner>,
+    shadow: Option<Shadow>,
 }
 
 #[wasm_bindgen]
@@ -102,7 +104,7 @@ impl SimHandle {
 
         let mut sim = Simulation::new(device, program);
         sim.seed_disruption(js_random_seed());
-        Ok(SimHandle { sim, planner: None })
+        Ok(SimHandle { sim, planner: None, shadow: None })
     }
 
     /// Create from a device id + preset name ("hmode", "lmode", "density_limit").
@@ -120,7 +122,7 @@ impl SimHandle {
 
         let mut sim = Simulation::new(device, program);
         sim.seed_disruption(js_random_seed());
-        Ok(SimHandle { sim, planner: None })
+        Ok(SimHandle { sim, planner: None, shadow: None })
     }
 
     /// Advance the simulation by `dt` seconds and return the snapshot as JSON.
@@ -132,12 +134,17 @@ impl SimHandle {
             self.sim.start();
         }
         let snap = self.sim.step(dt);
+        if let Some(sh) = self.shadow.as_mut() {
+            sh.step(dt, &snap);
+        }
         serde_json::to_string(&snap).unwrap_or_else(|_| "{}".into())
     }
 
     /// Reset the simulation to t = 0.
     #[wasm_bindgen]
     pub fn reset(&mut self) {
+        self.shadow = None;
+        self.planner = None;
         self.sim.reset();
         self.sim.seed_disruption(js_random_seed());
     }
@@ -263,6 +270,21 @@ impl SimHandle {
             }
             None => false,
         }
+    }
+
+    /// Split off the shadow plasma (a copy without interventions, same random
+    /// draws) — call right *before* the first intervention. No-op if one exists.
+    #[wasm_bindgen]
+    pub fn shadow_start(&mut self) {
+        if self.shadow.is_none() {
+            self.shadow = Some(Shadow::start(&self.sim));
+        }
+    }
+
+    /// The shadow's story as JSON (see `ShadowStatus`), or "" if none.
+    #[wasm_bindgen]
+    pub fn shadow_status_json(&self) -> String {
+        self.shadow.as_ref().map(|s| serde_json::to_string(&s.status()).unwrap_or_default()).unwrap_or_default()
     }
 
     /// Return every multiplier to 1 (the programme as written).

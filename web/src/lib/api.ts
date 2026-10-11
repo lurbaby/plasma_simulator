@@ -161,6 +161,7 @@ export const api = {
   liveStart: (model: string, duration: number, scenario = 'interactive') =>
     call<{ ok: boolean; model: string | null }>('/api/live/start', { model, duration, scenario }),
   liveStep: (steps: { t: number; v: number[]; extra?: unknown }[]) => call<{ p: number[]; info?: (LiveInfo | null)[] }>('/api/live/step', { steps }),
+  liveShot: (duration: number, scenario = 'interactive') => call('/api/live/shot', { duration, scenario }),
   liveStop: () => call('/api/live/stop', {}),
 }
 

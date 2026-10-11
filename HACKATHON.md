@@ -13,10 +13,25 @@
 Документація:
 - [docs/USER_GUIDE.md](docs/USER_GUIDE.md) — **інструкція користувача** (з чого почати, усі панелі, як моделі віддають причини);
 - [docs/PHYSICS_CONTROLS.md](docs/PHYSICS_CONTROLS.md) — **для фізиків**: керовані параметри, межі, механізми зриву, політика керування;
+- [docs/MODELS.md](docs/MODELS.md) — **нейронні мережі**: що робить v8, ImpactNet і учень fixer, де яка використовується;
 - [docs/FIXER.md](docs/FIXER.md) — **fixer**: запобігання зриву в реальному часі, датасет для моделі-учня;
 - [SIM_API.md](SIM_API.md) — інтерфейс рушія для даних з діями, справжній ризик, швидкість.
 
 ### Журнал змін
+
+**2026-10-11 (виправлення панелі)**
+- Новий розряд у браузері (Reset, повторний Start, інший сценарій) — модель отримує сигнал «новий
+  розряд» (`POST /api/live/shot`); раніше вона тягнула історію попереднього, і p могла застрягати на 0.
+- Підсумок наприкінці розряду показується завжди, навіть якщо fixer не втручався.
+- Новий документ [docs/MODELS.md](docs/MODELS.md): ролі моделей, збірки, режими, протокол.
+
+**2026-10-11 (фінальний вигляд)**
+- Панель «Керування» спрощено для презентації: одна модель `v8_fixer` (тривога v8 + причини
+  ImpactNet + дія учня), fixer увімкнено за замовчуванням; прибрано «рушій-оракул», простий порадник
+  і вибір «хто вирішує». Модель, fixer, банер і вікна працюють і при закритій панелі.
+- **Тінь** (`shadow.rs`): копія рушія з тим самим генератором випадкових подій іде без втручань —
+  доказ «без fixer плазма зірвалася б на t = …»; спливаюче вікно «Зрив відвернуто» і підсумок розряду.
+- Символи банера без емодзі (✖ ✓ ⚡ ⚠) — відображаються в будь-якому шрифті.
 
 **2026-10-11 (учень fixer)**
 - Модель-учень `models/fixer_student`: вибирає дію fixer лише з 100 приладів (ImpactNet + тренди →
@@ -252,7 +267,7 @@ Python-клієнт рушія — `tools/fusion_sim_client.py` (`step`, `set`, 
 | POST `/api/dataset` `{shots, seed, stride, extras}` · GET `/progress` · GET `/file?name=measured.csv\|shots.csv` · POST `/cancel` | датасет |
 | POST `/api/validate` `{model, lead_time_s, fpr_budget, shots, seed}` · GET `/progress` · GET `/file?name=measured.csv\|shots.csv\|run.json` · POST `/cancel` | test run |
 | POST `/api/rescore` `{report, lead_time_s, fpr_budget}` | перерахунок звіту |
-| POST `/api/live/start` `{model, duration}` · POST `/api/live/step` `{steps:[{t, v, extra?}]}` → `{p:[…], info:[…]}` · POST `/api/live/stop` | модель у реальному часі (`extra` → `model.extra`, напр. множники fixer; `info` — розширена відповідь: p_now, λ, частки, action, costs) |
+| POST `/api/live/start` `{model, duration}` · POST `/api/live/step` `{steps:[{t, v, extra?}]}` → `{p:[…], info:[…]}` · POST `/api/live/shot` `{duration}` (новий розряд) · POST `/api/live/stop` | модель у реальному часі (`extra` → `model.extra`, напр. множники fixer; `info` — розширена відповідь: p_now, λ, частки, action, costs) |
 
 `model` — шлях до теки здачі або `"uploaded"` (перетягнута тека). Файли пишуться в `--out`
 (за замовчуванням `./fusionsim-data`).
@@ -266,6 +281,7 @@ Python-клієнт рушія — `tools/fusion_sim_client.py` (`step`, `set`, 
 | `crates/tok-sym-core/src/devices.rs` | JET як у toksym |
 | `crates/tok-sym-core/src/simulation.rs` | overrides, канали в знімку, хронологія зриву, `compute_geometry`; `Clone`, `ProgramScales` (множники fixer), режим копії (`stochastic`, `compute_channels`, `freeze_program_at`, `plan`), `risk()` |
 | `crates/tok-sym-core/src/fixer.rs` | **новий** — fixer: дії, прогін копій, ціна, покроковий `Planner` |
+| `crates/tok-sym-core/src/shadow.rs` | **новий** — тінь: та сама плазма без втручань (доказ відвернутого зриву) |
 | `crates/tok-sym-core/src/diagnostics.rs` | `NoiseGen: Clone` |
 | `crates/tok-sym-core/src/disruption.rs` | `locked_mode_amplitude()` без шуму |
 | `crates/tok-sym-core/src/channels.rs` | **новий** — 100 каналів |
@@ -278,16 +294,16 @@ Python-клієнт рушія — `tools/fusion_sim_client.py` (`step`, `set`, 
 | `web/src/components/{DatasetPanel,TestRunPanel,ControlPanel}.tsx` | **нові** панелі (українською) |
 | `web/src/lib/mechanisms.ts` | **новий** — механізми зриву: назви, кольори, частки |
 | `crates/fusion-cli/src/mech.rs` | **новий** — справжній розклад λ рушія на механізми |
-| `docs/USER_GUIDE.md`, `docs/PHYSICS_CONTROLS.md`, `docs/FIXER.md` | **нові** — інструкція користувача, довідка для фізиків, fixer і модель-учень |
+| `docs/USER_GUIDE.md`, `docs/PHYSICS_CONTROLS.md`, `docs/FIXER.md`, `docs/MODELS.md` | **нові** — інструкція користувача, довідка для фізиків, fixer і модель-учень, ролі моделей |
 | `web/src/lib/api.ts` | **новий** — клієнт API |
 | `web/src/lib/useSimulation.ts`, `types.ts`, `pages/ControlRoom.tsx` | overrides, підписка на кроки, `getSim()`, кнопки; JET за замовчуванням на DD |
-| `web/src/components/ControlPanel.tsx` | fixer (оракул / учень), банер фаз, таблиця рішень, простий порадник, ручні уставки |
+| `web/src/components/ControlPanel.tsx` | модель + fixer (`v8_fixer`), банер фаз (завжди), спливаючі вікна з тінню, оцінки дій, ручні уставки |
 | `web/vite.config.ts`, `build.sh`, `.gitignore` | проксі `/api`, збірка `fusionsim` |
 | `tools/fusion_sim_client.py`, `tools/closed_loop.py` | Python-клієнт і замкнений контур |
 
-Тести: `cargo test --release` — 58 тестів ядра (у т.ч. генератор і fixer: копія не змінює оригінал; зниження густини знижує ризик Грінвальда) + залік + аудит фізики, зелені.
+Тести: `cargo test --release` — 59 тестів ядра (у т.ч. генератор; fixer: копія не змінює оригінал, зниження густини знижує ризик Грінвальда; тінь без втручань повторює розряд) + залік + аудит фізики, зелені.
 
-Поза репозиторієм: моделі `../models/{impactnet,v8_impact,fixer_student}` (здачі), навчання учня й дані — `../fusion_work/{student,fixer_data}`.
+Поза репозиторієм: моделі `../models/{impactnet,v8_impact,fixer_student,v8_fixer}` (здачі), навчання учня й дані — `../fusion_work/{student,fixer_data}`.
 
 ### Виправлені пастки
 - xorshift з малим seed (1, 7, 42) давав rand ≈ 0 → зрив на першому кроці при I_p > 0.24 МА;

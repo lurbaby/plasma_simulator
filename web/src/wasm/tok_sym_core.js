@@ -224,6 +224,29 @@ export class SimHandle {
         }
     }
     /**
+     * Split off the shadow plasma (a copy without interventions, same random
+     * draws) — call right *before* the first intervention. No-op if one exists.
+     */
+    shadow_start() {
+        wasm.simhandle_shadow_start(this.__wbg_ptr);
+    }
+    /**
+     * The shadow's story as JSON (see `ShadowStatus`), or "" if none.
+     * @returns {string}
+     */
+    shadow_status_json() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.simhandle_shadow_status_json(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * Get the current status as a string.
      * @returns {string}
      */

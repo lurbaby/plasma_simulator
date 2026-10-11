@@ -82,6 +82,8 @@ pub mod generator;
 
 pub mod fixer;
 
+pub mod shadow;
+
 /// WASM-bindgen API surface (JSON-based, feature-gated).
 #[cfg(feature = "wasm")]
 mod wasm_api;

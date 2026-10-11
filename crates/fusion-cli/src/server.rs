@@ -41,6 +41,7 @@ struct Job {
 
 struct Live {
     model: ModelProcess,
+    shot: u64,
 }
 
 struct State {
@@ -338,7 +339,7 @@ fn handle(st: &Arc<State>, mut req: Request) {
                 Ok((m, name))
             }) {
                 Ok((m, name)) => {
-                    *live = Some(Live { model: m });
+                    *live = Some(Live { model: m, shot: 0 });
                     json_resp(200, &json!({"ok": true, "model": name}))
                 }
                 Err(e) => err(400, e),
@@ -382,6 +383,28 @@ fn handle(st: &Arc<State>, mut req: Request) {
                             err(500, e)
                         }
                         None => json_resp(200, &json!({"p": ps, "info": infos})),
+                    }
+                }
+            }
+        }
+        (Method::Post, "/api/live/shot") => {
+            // A new pulse in the browser (Reset, Start again, another scenario): the model
+            // must start a fresh discharge, or it carries the previous one's history over.
+            let b = body_json(&mut req);
+            let mut live = st.live.lock().unwrap();
+            match live.as_mut() {
+                None => err(409, "модель не запущена"),
+                Some(l) => {
+                    let prev = l.shot;
+                    l.shot += 1;
+                    let r = l.model.shot_end(prev).and_then(|_| l.model.shot_start(
+                        l.shot, b["duration"].as_f64().unwrap_or(20.0), b["scenario"].as_str().unwrap_or("interactive")));
+                    match r {
+                        Ok(()) => json_resp(200, &json!({"ok": true, "shot": l.shot})),
+                        Err(e) => {
+                            *live = None;
+                            err(500, e)
+                        }
                     }
                 }
             }
